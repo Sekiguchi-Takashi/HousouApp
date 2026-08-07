@@ -1,0 +1,1280 @@
+package com.appathy.housou
+
+import android.content.Intent
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.SeekBar
+import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * 管理コンソール本体。
+ * タブ: ダッシュボード / 放送 / 通話 / 端末 / 予約 / ログ / 設定
+ */
+class ConsoleUi(private val act: MainActivity, private val store: Store) {
+
+    private lateinit var root: FrameLayout
+    private lateinit var content: FrameLayout
+    private lateinit var tabRow: LinearLayout
+    private val h = Handler(Looper.getMainLooper())
+    private var attached = false
+    private var tab = 0
+
+    private var targetSpec = "all"
+    private var callTarget: Dev? = null
+    private var alwaysTalk = false
+    private var assistantReply = ""
+
+    private val refreshers = ArrayList<() -> Unit>()
+
+    private val tabNames = arrayOf("状況", "放送", "通話", "端末", "予約", "ログ", "設定")
+    private val tabIcons = arrayOf("📊", "📢", "🎙", "📱", "⏰", "📜", "⚙")
+
+    // ------------------------------------------------------------ 基盤
+    fun attach(container: FrameLayout) {
+        root = container
+        attached = true
+        startService()
+        ConsoleService.onUpdate = { refresh() }
+
+        val col = Ui.col(act)
+        col.setBackgroundColor(Ui.BG)
+        col.addView(header(), Ui.lp(Ui.MP, Ui.WC))
+        content = FrameLayout(act)
+        col.addView(content, LinearLayout.LayoutParams(Ui.MP, 0, 1f))
+        tabRow = buildTabs()
+        col.addView(tabRow, Ui.lp(Ui.MP, Ui.WC))
+
+        root.removeAllViews()
+        root.addView(col)
+        render()
+        tick()
+    }
+
+    fun detach() {
+        attached = false
+        ConsoleService.onUpdate = null
+    }
+
+    fun onBack(): Boolean {
+        if (tab != 0) {
+            tab = 0
+            render()
+            return true
+        }
+        return false
+    }
+
+    private fun startService() {
+        val i = Intent(act, ConsoleService::class.java)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                act.startForegroundService(i)
+            } else {
+                act.startService(i)
+            }
+        } catch (e: Exception) { }
+    }
+
+    private fun tick() {
+        if (!attached) return
+        refresh()
+        h.postDelayed({ tick() }, 1500)
+    }
+
+    private fun refresh() {
+        if (!attached) return
+        for (f in refreshers) {
+            try { f() } catch (e: Exception) { }
+        }
+    }
+
+    private fun bg(f: () -> Unit) {
+        Thread {
+            try { f() } catch (e: Exception) { }
+        }.start()
+    }
+
+    private fun ui(f: () -> Unit) {
+        h.post {
+            if (attached) {
+                try { f() } catch (e: Exception) { }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ ヘッダ/タブ
+    private fun header(): View {
+        val l = Ui.row(act)
+        l.setBackgroundColor(Ui.CARD)
+        l.setPadding(Ui.dp(act, 16), Ui.dp(act, 12), Ui.dp(act, 16), Ui.dp(act, 12))
+
+        val left = Ui.col(act)
+        left.addView(Ui.tv(act, store.building, 17f, Ui.FG, true))
+        val sub = Ui.tv(act, "", 11f, Ui.SUB)
+        left.addView(sub)
+        l.addView(left, LinearLayout.LayoutParams(0, Ui.WC, 1f))
+
+        val badge = Ui.pill(act, "—", Ui.CARD2, Ui.SUB)
+        l.addView(badge)
+
+        refreshers.add {
+            val all = Registry.all()
+            val on = all.count { it.online }
+            sub.text = "コンソール ${Net.localIp()}　端末 ${on}/${all.size} オンライン"
+            val worst = all.maxOfOrNull { Diag.score(it) } ?: 0
+            badge.text = if (all.isEmpty()) "端末なし" else Diag.rank(worst)
+            val g = GradientDrawable()
+            g.cornerRadius = Ui.dp(act, 20).toFloat()
+            g.setColor(if (all.isEmpty()) Ui.CARD2 else Diag.color(worst))
+            badge.background = g
+            badge.setTextColor(if (all.isEmpty()) Ui.SUB else Ui.DARKTXT)
+        }
+        return l
+    }
+
+    private fun buildTabs(): LinearLayout {
+        val r = Ui.row(act)
+        r.setBackgroundColor(Ui.CARD)
+        r.setPadding(0, Ui.dp(act, 4), 0, Ui.dp(act, 4))
+        var i = 0
+        while (i < tabNames.size) {
+            val idx = i
+            val cell = Ui.col(act)
+            cell.gravity = Gravity.CENTER
+            cell.setPadding(0, Ui.dp(act, 6), 0, Ui.dp(act, 6))
+            val ic = Ui.tv(act, tabIcons[idx], 17f)
+            ic.gravity = Gravity.CENTER
+            val tx = Ui.tv(act, tabNames[idx], 9f, Ui.SUB)
+            tx.gravity = Gravity.CENTER
+            cell.addView(ic)
+            cell.addView(tx)
+            cell.isClickable = true
+            cell.setOnClickListener {
+                tab = idx
+                render()
+            }
+            r.addView(cell, LinearLayout.LayoutParams(0, Ui.WC, 1f))
+            i++
+        }
+        return r
+    }
+
+    private fun paintTabs() {
+        var i = 0
+        while (i < tabRow.childCount) {
+            val cell = tabRow.getChildAt(i) as LinearLayout
+            val tx = cell.getChildAt(1) as TextView
+            tx.setTextColor(if (i == tab) Ui.ACC else Ui.SUB)
+            cell.alpha = if (i == tab) 1.0f else 0.65f
+            i++
+        }
+    }
+
+    private fun render() {
+        if (!attached) return
+        refreshers.clear()
+        refreshers.add { }
+        val v = when (tab) {
+            0 -> tabDash()
+            1 -> tabBroadcast()
+            2 -> tabCall()
+            3 -> tabDevices()
+            4 -> tabSchedule()
+            5 -> tabLog()
+            else -> tabSettings()
+        }
+        content.removeAllViews()
+        content.addView(v)
+        // ヘッダの更新関数を再登録
+        content.post { }
+        paintTabs()
+        rebuildHeaderRefresher()
+        refresh()
+    }
+
+    private var headerSub: TextView? = null
+
+    private fun rebuildHeaderRefresher() {
+        // header() 内で登録済みの refresher は render() でクリアされるため再構築する
+        val hdr = (root.getChildAt(0) as LinearLayout).getChildAt(0) as LinearLayout
+        val left = hdr.getChildAt(0) as LinearLayout
+        val sub = left.getChildAt(1) as TextView
+        val badge = hdr.getChildAt(1) as TextView
+        val title = left.getChildAt(0) as TextView
+        headerSub = sub
+        refreshers.add {
+            title.text = store.building
+            val all = Registry.all()
+            val on = all.count { it.online }
+            sub.text = "コンソール ${Net.localIp()}　端末 ${on}/${all.size} オンライン"
+            val worst = all.maxOfOrNull { Diag.score(it) } ?: 0
+            badge.text = if (all.isEmpty()) "端末なし" else Diag.rank(worst)
+            val g = GradientDrawable()
+            g.cornerRadius = Ui.dp(act, 20).toFloat()
+            g.setColor(if (all.isEmpty()) Ui.CARD2 else Diag.color(worst))
+            badge.background = g
+            badge.setTextColor(if (all.isEmpty()) Ui.SUB else Ui.DARKTXT)
+        }
+    }
+
+    // ============================================================ 0 ダッシュボード
+    private fun tabDash(): View {
+        val l = Ui.col(act, 14)
+
+        // AIアシスタント
+        val c0 = Ui.card(act, Ui.CARD2)
+        c0.addView(Ui.tv(act, "🤖 AIアシスタント", 16f, Ui.ACC, true))
+        c0.addView(
+            Ui.tv(act, "例:「全館放送を開始」「3階だけ放送」「今日の放送履歴を表示」「朝礼を毎日8:30に登録」", 11f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
+        val inp = Ui.edit(act, "指示を入力")
+        c0.addView(inp, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        val reply = Ui.tv(act, assistantReply, 12f, Ui.CYAN)
+        c0.addView(Ui.btn(act, "実行") {
+            runAssistant(inp.text.toString(), reply)
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        c0.addView(reply, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        l.addView(c0)
+
+        // 概況
+        val c1 = Ui.card(act)
+        c1.addView(Ui.tv(act, "📊 システム状況", 16f, Ui.FG, true))
+        val sum = Ui.tv(act, "", 13f, Ui.SUB)
+        c1.addView(sum, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        val stats = Ui.row(act)
+        c1.addView(stats, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        val s1 = statCell("端末", "0")
+        val s2 = statCell("オンライン", "0")
+        val s3 = statCell("平均RTT", "-")
+        stats.addView(s1, LinearLayout.LayoutParams(0, Ui.WC, 1f))
+        stats.addView(s2, LinearLayout.LayoutParams(0, Ui.WC, 1f))
+        stats.addView(s3, LinearLayout.LayoutParams(0, Ui.WC, 1f))
+        l.addView(c1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        // 通知
+        val c2 = Ui.card(act)
+        c2.addView(Ui.tv(act, "🔔 通知 / AI推論", 16f, Ui.FG, true))
+        val alerts = Ui.col(act)
+        c2.addView(alerts, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        l.addView(c2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        // クイック
+        val c3 = Ui.card(act)
+        c3.addView(Ui.tv(act, "⚡ クイック操作", 16f, Ui.FG, true))
+        c3.addView(Ui.btn(act, "🔔 全館チャイム", Ui.CYAN) {
+            sendChime("all", false)
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        c3.addView(Ui.btn(act, "🚨 緊急放送", Ui.RED, Ui.FG) {
+            emergencyDialog()
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        l.addView(c3, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        l.addView(Ui.space(act, 20))
+
+        refreshers.add {
+            val all = Registry.all()
+            sum.text = Diag.summary(all)
+            (s1.getChildAt(1) as TextView).text = all.size.toString()
+            (s2.getChildAt(1) as TextView).text = all.count { it.online }.toString()
+            val on = all.filter { it.online && it.rtt >= 0 }
+            (s3.getChildAt(1) as TextView).text =
+                if (on.isEmpty()) "-" else (on.sumOf { it.rtt } / on.size).toString() + "ms"
+
+            alerts.removeAllViews()
+            val list = Diag.alerts(all)
+            if (list.isEmpty()) {
+                alerts.addView(Ui.tv(act, "異常はありません。全端末が正常に応答しています。", 12f, Ui.GREEN))
+            } else {
+                for (a in list.take(8)) {
+                    val row = Ui.col(act)
+                    row.setPadding(0, Ui.dp(act, 6), 0, Ui.dp(act, 6))
+                    val c = if (a.level >= 3) Ui.RED else if (a.level == 2) Ui.ACC else Ui.CYAN
+                    row.addView(Ui.tv(act, "● " + a.title, 13f, c, true))
+                    row.addView(Ui.tv(act, "　 " + a.detail, 11f, Ui.SUB))
+                    alerts.addView(row)
+                }
+            }
+        }
+        return Ui.scroll(act, l)
+    }
+
+    private fun statCell(k: String, v: String): LinearLayout {
+        val c = Ui.col(act)
+        c.gravity = Gravity.CENTER
+        c.addView(Ui.tv(act, k, 10f, Ui.SUB).also { it.gravity = Gravity.CENTER })
+        c.addView(Ui.tv(act, v, 20f, Ui.ACC, true).also { it.gravity = Gravity.CENTER })
+        return c
+    }
+
+    private fun runAssistant(text: String, reply: TextView) {
+        val r = Assistant.parse(text)
+        assistantReply = r.reply
+        reply.text = r.reply
+        if (r.floor > 0) targetSpec = "floor:${r.floor}"
+        else if (r.group.isNotEmpty()) targetSpec = "group:${r.group}"
+        else targetSpec = "all"
+
+        when (r.action) {
+            Assistant.A_BROADCAST -> { tab = 1; render() }
+            Assistant.A_CALL -> { tab = 2; render() }
+            Assistant.A_DEVICES -> { tab = 3; render() }
+            Assistant.A_LOG -> { tab = 5; render() }
+            Assistant.A_CHIME -> sendChime(targetSpec, false)
+            Assistant.A_EMERGENCY -> {
+                if (r.text.isNotEmpty()) sendTts(targetSpec, r.text, true)
+                else emergencyDialog()
+            }
+            Assistant.A_SPEAK -> {
+                if (r.text.isNotEmpty()) sendTts(targetSpec, r.text, false)
+                else act.toast("読み上げる文章を「」で囲って指定してください")
+            }
+            Assistant.A_SCHEDULE -> {
+                addSchedule(r.hour, r.minute, if (r.weekday) "weekday" else "daily", targetSpec, r.text, r.text)
+                tab = 4
+                render()
+            }
+            Assistant.A_STATUS -> {
+                reply.text = Diag.summary(Registry.all())
+            }
+            else -> { }
+        }
+        store.log("assistant", "「$text」→ ${r.reply}")
+    }
+
+    // ============================================================ 1 放送
+    private var pttBtn: TextView? = null
+
+    private fun tabBroadcast(): View {
+        val l = Ui.col(act, 14)
+
+        // 対象選択
+        val c0 = Ui.card(act)
+        c0.addView(Ui.tv(act, "🎯 放送対象", 16f, Ui.FG, true))
+        val label = Ui.tv(act, "", 20f, Ui.ACC, true)
+        c0.addView(label, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        val count = Ui.tv(act, "", 12f, Ui.SUB)
+        c0.addView(count)
+
+        val r1 = Ui.row(act)
+        r1.addView(chip("全館") { targetSpec = "all"; render() }, cw())
+        r1.addView(chip("フロア") { pickFloor() }, cw())
+        r1.addView(chip("グループ") { pickGroup() }, cw())
+        r1.addView(chip("個別") { pickDevice() }, cw())
+        c0.addView(r1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        l.addView(c0)
+
+        // PTT
+        val c1 = Ui.card(act, Ui.CARD2)
+        val ptt = Ui.tv(act, "押している間\nマイク放送", 20f, Ui.DARKTXT, true)
+        ptt.gravity = Gravity.CENTER
+        val g = GradientDrawable()
+        g.cornerRadius = Ui.dp(act, 100).toFloat()
+        g.setColor(Ui.ACC)
+        ptt.background = g
+        ptt.setPadding(0, Ui.dp(act, 52), 0, Ui.dp(act, 52))
+        ptt.setOnTouchListener { v, ev ->
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    startPtt(); v.alpha = 0.75f; true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    stopPtt(); v.alpha = 1f; v.performClick(); true
+                }
+                else -> false
+            }
+        }
+        pttBtn = ptt
+        c1.addView(ptt, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        val meter = Ui.tv(act, "入力レベル —", 12f, Ui.SUB)
+        meter.gravity = Gravity.CENTER
+        c1.addView(meter, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        l.addView(c1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        // 補助
+        val c2 = Ui.card(act)
+        c2.addView(Ui.tv(act, "🔔 チャイム / 緊急", 16f, Ui.FG, true))
+        val r2 = Ui.row(act)
+        val b1 = Ui.ghost(act, "チャイム", Ui.CYAN) { sendChime(targetSpec, false) }
+        val b2 = Ui.btn(act, "🚨 緊急放送", Ui.RED, Ui.FG) { emergencyDialog() }
+        val lp1 = LinearLayout.LayoutParams(0, Ui.WC, 1f)
+        lp1.rightMargin = Ui.dp(act, 6)
+        val lp2 = LinearLayout.LayoutParams(0, Ui.WC, 1f)
+        lp2.leftMargin = Ui.dp(act, 6)
+        r2.addView(b1, lp1)
+        r2.addView(b2, lp2)
+        c2.addView(r2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        l.addView(c2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        // AI読み上げ
+        val c3 = Ui.card(act)
+        c3.addView(Ui.tv(act, "🗣 AIテキスト読み上げ", 16f, Ui.FG, true))
+        val te = Ui.edit(act, "放送する文章")
+        te.setSingleLine(false)
+        c3.addView(te, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        c3.addView(Ui.btn(act, "読み上げて放送") {
+            val t = te.text.toString()
+            if (t.isBlank()) act.toast("文章を入力してください") else sendTts(targetSpec, t, false)
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+
+        val tpl = store.templates()
+        if (tpl.length() > 0) {
+            c3.addView(Ui.tv(act, "定型文", 12f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14)))
+            var i = 0
+            while (i < tpl.length() && i < 6) {
+                val o = tpl.getJSONObject(i)
+                c3.addView(Ui.ghost(act, o.optString("title"), Ui.FG) {
+                    sendTts(targetSpec, o.optString("body"), false)
+                }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+                i++
+            }
+        }
+        l.addView(c3, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        l.addView(Ui.space(act, 20))
+
+        refreshers.add {
+            label.text = Targeting.label(targetSpec)
+            val n = Targeting.resolve(targetSpec).size
+            count.text = "オンライン ${n} 台へ送信されます（音質: ${if (store.quality == "low") "低帯域" else "高音質"}）"
+            meter.text = if (ConsoleService.broadcasting) {
+                "🔴 放送中　入力レベル " + "▮".repeat((ConsoleService.micLevel / 12).coerceIn(0, 8))
+            } else {
+                "入力レベル —"
+            }
+        }
+        return Ui.scroll(act, l)
+    }
+
+    private fun cw(): LinearLayout.LayoutParams {
+        val p = LinearLayout.LayoutParams(0, Ui.WC, 1f)
+        p.rightMargin = Ui.dp(act, 4)
+        return p
+    }
+
+    private fun chip(text: String, f: () -> Unit): TextView =
+        Ui.ghost(act, text, Ui.FG) { f() }
+
+    private fun pickFloor() {
+        val fl = Registry.floors()
+        if (fl.isEmpty()) {
+            act.toast("端末が検出されていません")
+            return
+        }
+        val items = fl.map { "${it}階" }.toTypedArray()
+        AlertDialog.Builder(act).setTitle("フロアを選択")
+            .setItems(items) { _, i ->
+                targetSpec = "floor:${fl[i]}"
+                render()
+            }.show()
+    }
+
+    private fun pickGroup() {
+        val gs = Registry.groups()
+        if (gs.isEmpty()) {
+            act.toast("端末が検出されていません")
+            return
+        }
+        AlertDialog.Builder(act).setTitle("グループを選択")
+            .setItems(gs.toTypedArray()) { _, i ->
+                targetSpec = "group:${gs[i]}"
+                render()
+            }.show()
+    }
+
+    private fun pickDevice() {
+        val ds = Registry.all()
+        if (ds.isEmpty()) {
+            act.toast("端末が検出されていません")
+            return
+        }
+        AlertDialog.Builder(act).setTitle("端末を選択")
+            .setItems(ds.map { it.label() }.toTypedArray()) { _, i ->
+                targetSpec = "dev:${ds[i].id}"
+                render()
+            }.show()
+    }
+
+    private fun startPtt() {
+        val targets = Targeting.resolve(targetSpec)
+        if (targets.isEmpty()) {
+            act.toast("対象端末がオンラインではありません")
+            return
+        }
+        val rate = store.rate
+        ConsoleService.broadcasting = true
+        bg {
+            val req = Net.cmd("bcast_start")
+            req.put("rate", rate)
+            for (d in targets) Net.ctrl(d.ip, req, 2000)
+            val ok = ConsoleService.startTx(targets.map { it.ip }, rate, store.autoGain)
+            if (!ok) {
+                ConsoleService.broadcasting = false
+                ui { act.toast("マイクを開始できません（権限を確認）") }
+            }
+        }
+        store.log("broadcast", "放送開始 → ${Targeting.label(targetSpec)} (${targets.size}台)")
+    }
+
+    private fun stopPtt() {
+        if (!ConsoleService.broadcasting) return
+        ConsoleService.broadcasting = false
+        val targets = Targeting.resolve(targetSpec)
+        bg {
+            ConsoleService.stopTx()
+            val req = Net.cmd("bcast_stop")
+            for (d in targets) Net.ctrl(d.ip, req, 2000)
+        }
+        store.log("broadcast", "放送終了 → ${Targeting.label(targetSpec)}")
+    }
+
+    private fun sendChime(spec: String, urgent: Boolean) {
+        val targets = Targeting.resolve(spec)
+        if (targets.isEmpty()) {
+            act.toast("対象端末がオンラインではありません")
+            return
+        }
+        bg {
+            val req = Net.cmd("chime")
+            req.put("urgent", urgent)
+            for (d in targets) Net.ctrl(d.ip, req, 3000)
+            ui { act.toast("チャイムを送信しました (${targets.size}台)") }
+        }
+        store.log("broadcast", "チャイム → ${Targeting.label(spec)}")
+    }
+
+    private fun sendTts(spec: String, text: String, urgent: Boolean) {
+        val targets = Targeting.resolve(spec)
+        if (targets.isEmpty()) {
+            act.toast("対象端末がオンラインではありません")
+            return
+        }
+        bg {
+            val req = Net.cmd("tts")
+            req.put("text", text)
+            req.put("urgent", urgent)
+            req.put("chime", true)
+            for (d in targets) Net.ctrl(d.ip, req, 3500)
+            ui { act.toast("読み上げを送信しました (${targets.size}台)") }
+        }
+        store.log(if (urgent) "emergency" else "broadcast", "読み上げ「$text」→ ${Targeting.label(spec)}")
+    }
+
+    private fun emergencyDialog() {
+        val box = Ui.col(act, 16)
+        box.addView(Ui.tv(act, "対象: " + Targeting.label(targetSpec), 13f, Ui.SUB))
+        val e = Ui.edit(act, "緊急放送の文言", "緊急放送です。落ち着いて避難してください。")
+        e.setSingleLine(false)
+        box.addView(e, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        box.addView(
+            Ui.tv(act, "※ 対象端末の音量を最大にし、警報チャイムの後に2回読み上げます。", 11f, Ui.RED),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10))
+        )
+        AlertDialog.Builder(act)
+            .setTitle("🚨 緊急放送")
+            .setView(box)
+            .setNegativeButton("中止", null)
+            .setPositiveButton("実行") { _, _ ->
+                sendTts(targetSpec, e.text.toString(), true)
+            }
+            .show()
+    }
+
+    // ============================================================ 2 通話
+    private fun tabCall(): View {
+        val l = Ui.col(act, 14)
+
+        val c0 = Ui.card(act)
+        c0.addView(Ui.tv(act, "🎙 通話相手", 16f, Ui.FG, true))
+        val who = Ui.tv(act, "", 19f, Ui.CYAN, true)
+        c0.addView(who, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        c0.addView(Ui.ghost(act, "端末を選択", Ui.FG) {
+            val ds = Registry.online()
+            if (ds.isEmpty()) {
+                act.toast("オンライン端末がありません")
+            } else {
+                AlertDialog.Builder(act).setTitle("通話する端末")
+                    .setItems(ds.map { it.label() }.toTypedArray()) { _, i ->
+                        callTarget = ds[i]
+                        render()
+                    }.show()
+            }
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        l.addView(c0)
+
+        val c1 = Ui.card(act, Ui.CARD2)
+        val status = Ui.tv(act, "", 14f, Ui.SUB)
+        status.gravity = Gravity.CENTER
+        c1.addView(status)
+
+        val toggle = Ui.btn(act, "通話を開始", Ui.GREEN, Ui.DARKTXT) {
+            if (ConsoleService.calling) endCall() else beginCall()
+        }
+        c1.addView(toggle, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        val ptt = Ui.tv(act, "押して話す", 18f, Ui.DARKTXT, true)
+        ptt.gravity = Gravity.CENTER
+        val g = GradientDrawable()
+        g.cornerRadius = Ui.dp(act, 60).toFloat()
+        g.setColor(Ui.CYAN)
+        ptt.background = g
+        ptt.setPadding(0, Ui.dp(act, 36), 0, Ui.dp(act, 36))
+        ptt.setOnTouchListener { v, ev ->
+            if (!ConsoleService.calling) return@setOnTouchListener false
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> { talkOn(); v.alpha = 0.75f; true }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (!alwaysTalk) talkOff()
+                    v.alpha = 1f; v.performClick(); true
+                }
+                else -> false
+            }
+        }
+        c1.addView(ptt, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14)))
+
+        val sw = Ui.ghost(act, "", Ui.FG) {
+            alwaysTalk = !alwaysTalk
+            if (ConsoleService.calling) {
+                if (alwaysTalk) talkOn() else talkOff()
+            }
+            render()
+        }
+        sw.text = if (alwaysTalk) "🔁 双方向通話: ON（常時送話）" else "🔁 双方向通話: OFF（Push-to-Talk）"
+        c1.addView(sw, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        l.addView(c1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        val c2 = Ui.card(act)
+        c2.addView(Ui.tv(act, "ℹ 通話について", 15f, Ui.FG, true))
+        c2.addView(
+            Ui.tv(
+                act,
+                "通話開始で相手端末のマイクがコンソールへ、コンソールのマイクが相手端末へ流れます。" +
+                        "Push-to-Talkでは押している間だけこちらの声を送ります。", 12f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8))
+        )
+        l.addView(c2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        l.addView(Ui.space(act, 20))
+
+        refreshers.add {
+            who.text = callTarget?.label() ?: "未選択"
+            status.text = if (ConsoleService.calling) "🟢 通話中" else "待機中"
+            toggle.text = if (ConsoleService.calling) "通話を終了" else "通話を開始"
+            val gg = GradientDrawable()
+            gg.cornerRadius = Ui.dp(act, 12).toFloat()
+            gg.setColor(if (ConsoleService.calling) Ui.RED else Ui.GREEN)
+            toggle.background = gg
+        }
+        return Ui.scroll(act, l)
+    }
+
+    private fun beginCall() {
+        val d = callTarget
+        if (d == null) {
+            act.toast("端末を選択してください")
+            return
+        }
+        val rate = store.rate
+        ConsoleService.calling = true
+        ConsoleService.callTargetId = d.id
+        bg {
+            ConsoleService.startCallRx(rate)
+            val req = Net.cmd("talk_start")
+            req.put("rate", rate)
+            req.put("console_ip", Net.localIp())
+            Net.ctrl(d.ip, req, 3000)
+            if (alwaysTalk) ConsoleService.startTx(listOf(d.ip), rate, store.autoGain)
+        }
+        store.log("call", "通話開始 → ${d.label()}")
+    }
+
+    private fun endCall() {
+        val d = callTarget
+        ConsoleService.calling = false
+        bg {
+            ConsoleService.stopTx()
+            ConsoleService.stopCallRx()
+            if (d != null) Net.ctrl(d.ip, Net.cmd("talk_stop"), 3000)
+        }
+        store.log("call", "通話終了")
+    }
+
+    private fun talkOn() {
+        val d = callTarget ?: return
+        bg { ConsoleService.startTx(listOf(d.ip), store.rate, store.autoGain) }
+    }
+
+    private fun talkOff() {
+        bg { ConsoleService.stopTx() }
+    }
+
+    // ============================================================ 3 端末
+    private fun tabDevices(): View {
+        val l = Ui.col(act, 14)
+        val head = Ui.row(act)
+        head.addView(Ui.tv(act, "📱 端末一覧", 17f, Ui.FG, true), LinearLayout.LayoutParams(0, Ui.WC, 1f))
+        head.addView(Ui.ghost(act, "手動追加", Ui.SUB) { manualAdd() })
+        l.addView(head)
+
+        val list = Ui.col(act)
+        l.addView(list, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        l.addView(Ui.space(act, 20))
+
+        refreshers.add {
+            list.removeAllViews()
+            val ds = Registry.all()
+            if (ds.isEmpty()) {
+                val c = Ui.card(act)
+                c.addView(Ui.tv(act, "端末が見つかりません", 14f, Ui.FG, true))
+                c.addView(
+                    Ui.tv(
+                        act,
+                        "各フロアの端末で本アプリを起動し「フロア端末」を選ぶと、同一Wi-Fi上で自動検出されます。",
+                        12f, Ui.SUB
+                    ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+                )
+                list.addView(c)
+                return@add
+            }
+            for (d in ds) {
+                list.addView(deviceCard(d), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+            }
+        }
+        return Ui.scroll(act, l)
+    }
+
+    private fun deviceCard(d: Dev): View {
+        val c = Ui.card(act)
+        val top = Ui.row(act)
+        val name = Ui.tv(act, d.label(), 16f, Ui.FG, true)
+        top.addView(name, LinearLayout.LayoutParams(0, Ui.WC, 1f))
+        val sc = Diag.score(d)
+        top.addView(
+            Ui.pill(
+                act,
+                if (d.online) Diag.rank(sc) else "オフライン",
+                if (d.online) Diag.color(sc) else Ui.LINE,
+                if (d.online) Ui.DARKTXT else Ui.SUB
+            )
+        )
+        c.addView(top)
+
+        val info = StringBuilder()
+        info.append(d.ip.ifEmpty { "IP不明" })
+        info.append("　グループ ").append(d.group)
+        if (d.battery >= 0) info.append("　🔋").append(d.battery).append("%")
+        if (d.rssi != 0) info.append("　📶").append(d.rssi).append("dBm")
+        info.append("　🔊").append(d.volume).append("%")
+        info.append("　RTT ").append(if (d.rtt >= 0) "${d.rtt}ms" else "-")
+        c.addView(Ui.tv(act, info.toString(), 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+
+        if (d.playing || d.talking) {
+            c.addView(
+                Ui.tv(act, if (d.talking) "🎙 通話中" else "🔊 放送受信中", 12f, Ui.RED, true),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+            )
+        }
+
+        c.addView(Ui.ghost(act, "詳細・制御", Ui.ACC) { deviceDialog(d) }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        return c
+    }
+
+    private fun deviceDialog(d: Dev) {
+        val box = Ui.col(act, 16)
+        val name = Ui.edit(act, "端末名", d.name)
+        val floor = Ui.edit(act, "フロア", d.floor.toString(), true)
+        val grp = Ui.edit(act, "グループ", d.group)
+        box.addView(Ui.tv(act, "端末名", 11f, Ui.SUB))
+        box.addView(name, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(Ui.tv(act, "フロア", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        box.addView(floor, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(Ui.tv(act, "グループ", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        box.addView(grp, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
+        box.addView(Ui.tv(act, "音量  ${d.volume}%", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        val sb = SeekBar(act)
+        sb.max = 100
+        sb.progress = d.volume
+        box.addView(sb, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, u: Boolean) { }
+            override fun onStartTrackingTouch(s: SeekBar?) { }
+            override fun onStopTrackingTouch(s: SeekBar?) {
+                val v = s?.progress ?: 50
+                bg {
+                    val q = Net.cmd("volume")
+                    q.put("value", v)
+                    Net.ctrl(d.ip, q, 2500)
+                }
+                d.volume = v
+            }
+        })
+
+        box.addView(Ui.ghost(act, "🔔 テスト放送", Ui.CYAN) {
+            sendTts("dev:${d.id}", "こちらは${d.floor}階、${d.name}です。テスト放送を行っています。", false)
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14)))
+
+        box.addView(Ui.ghost(act, if (d.spkOn) "🔇 スピーカーを無効化" else "🔊 スピーカーを有効化", Ui.FG) {
+            bg {
+                val q = Net.cmd("spk")
+                q.put("on", !d.spkOn)
+                Net.ctrl(d.ip, q, 2500)
+            }
+            d.spkOn = !d.spkOn
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+
+        box.addView(Ui.ghost(act, if (d.micOn) "🎙 マイクを無効化" else "🎙 マイクを有効化", Ui.FG) {
+            bg {
+                val q = Net.cmd("mic")
+                q.put("on", !d.micOn)
+                Net.ctrl(d.ip, q, 2500)
+            }
+            d.micOn = !d.micOn
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+
+        box.addView(Ui.ghost(act, "🗑 台帳から削除", Ui.RED) {
+            Registry.remove(d.id)
+            Registry.save(store)
+            store.log("system", "端末を削除: ${d.label()}")
+            render()
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+
+        val diag = Ui.tv(
+            act,
+            "AI診断: ${Diag.rank(Diag.score(d))}（スコア ${Diag.score(d)}）\n" +
+                    "ver ${d.ver.ifEmpty { "-" }} / 最終応答 " +
+                    (if (d.lastSeen == 0L) "-" else Store.stamp(d.lastSeen)),
+            11f, Ui.SUB
+        )
+        box.addView(diag, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14)))
+
+        AlertDialog.Builder(act)
+            .setTitle(d.label())
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("閉じる", null)
+            .setPositiveButton("保存") { _, _ ->
+                val nm = name.text.toString().ifBlank { d.name }
+                val fl = floor.text.toString().toIntOrNull() ?: d.floor
+                val gp = grp.text.toString().ifBlank { d.group }
+                bg {
+                    val q = Net.cmd("set_info")
+                    q.put("name", nm)
+                    q.put("floor", fl)
+                    q.put("group", gp)
+                    Net.ctrl(d.ip, q, 3000)
+                }
+                d.name = nm; d.floor = fl; d.group = gp
+                Registry.save(store)
+                render()
+            }
+            .show()
+    }
+
+    private fun manualAdd() {
+        val box = Ui.col(act, 16)
+        val ip = Ui.edit(act, "端末のIPアドレス（例 192.168.1.42）")
+        box.addView(Ui.tv(act, "自動検出できない場合に直接指定します。", 12f, Ui.SUB))
+        box.addView(ip, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        AlertDialog.Builder(act)
+            .setTitle("端末を手動追加")
+            .setView(box)
+            .setNegativeButton("閉じる", null)
+            .setPositiveButton("接続") { _, _ ->
+                val addr = ip.text.toString().trim()
+                if (addr.isEmpty()) return@setPositiveButton
+                bg {
+                    val res = Net.ctrl(addr, Net.cmd("status"), 3000)
+                    ui {
+                        if (res == null) {
+                            act.toast("応答がありません")
+                        } else {
+                            val d = Registry.upsert(res, addr)
+                            Registry.save(store)
+                            act.toast("追加しました: ${d.label()}")
+                            render()
+                        }
+                    }
+                }
+            }
+            .show()
+    }
+
+    // ============================================================ 4 予約 / 定型文
+    private fun tabSchedule(): View {
+        val l = Ui.col(act, 14)
+
+        val c0 = Ui.card(act)
+        c0.addView(Ui.tv(act, "⏰ スケジュール放送", 16f, Ui.FG, true))
+        c0.addView(
+            Ui.tv(act, "指定時刻に、選択した対象へAI読み上げを自動送信します（コンソール常駐中に有効）。", 11f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
+        c0.addView(Ui.btn(act, "＋ 予約を追加") { scheduleDialog(null) }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        val slist = Ui.col(act)
+        c0.addView(slist, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        l.addView(c0)
+
+        val c1 = Ui.card(act)
+        c1.addView(Ui.tv(act, "📚 定型文ライブラリ", 16f, Ui.FG, true))
+        c1.addView(Ui.btn(act, "＋ 定型文を追加", Ui.CYAN) { templateDialog() }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        val tlist = Ui.col(act)
+        c1.addView(tlist, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        l.addView(c1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        l.addView(Ui.space(act, 20))
+
+        refreshers.add {
+            slist.removeAllViews()
+            val a = store.schedules()
+            if (a.length() == 0) {
+                slist.addView(Ui.tv(act, "予約はありません。", 12f, Ui.SUB))
+            }
+            var i = 0
+            while (i < a.length()) {
+                val o = a.getJSONObject(i)
+                val idx = i
+                val row = Ui.col(act, 0)
+                row.setPadding(0, Ui.dp(act, 8), 0, Ui.dp(act, 8))
+                val head = Ui.row(act)
+                val en = o.optBoolean("enabled", true)
+                head.addView(
+                    Ui.tv(
+                        act,
+                        String.format("%02d:%02d  %s", o.optInt("hour"), o.optInt("min"), o.optString("title")),
+                        15f, if (en) Ui.ACC else Ui.SUB, true
+                    ), LinearLayout.LayoutParams(0, Ui.WC, 1f)
+                )
+                head.addView(Ui.ghost(act, if (en) "有効" else "無効", if (en) Ui.GREEN else Ui.SUB) {
+                    o.put("enabled", !en)
+                    store.saveSchedules(a)
+                    refresh()
+                })
+                row.addView(head)
+                val mode = when (o.optString("mode")) {
+                    "weekday" -> "平日"
+                    else -> "毎日"
+                }
+                row.addView(
+                    Ui.tv(
+                        act,
+                        "$mode ・ ${Targeting.label(o.optString("target"))} ・ ${o.optString("text")}",
+                        11f, Ui.SUB
+                    ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+                )
+                val ops = Ui.row(act)
+                ops.addView(Ui.ghost(act, "今すぐ実行", Ui.CYAN) {
+                    sendTts(o.optString("target"), o.optString("text"), o.optBoolean("urgent", false))
+                }, cw())
+                ops.addView(Ui.ghost(act, "編集", Ui.FG) { scheduleDialog(idx) }, cw())
+                ops.addView(Ui.ghost(act, "削除", Ui.RED) {
+                    val out = JSONArray()
+                    var k = 0
+                    while (k < a.length()) {
+                        if (k != idx) out.put(a.getJSONObject(k))
+                        k++
+                    }
+                    store.saveSchedules(out)
+                    refresh()
+                }, cw())
+                row.addView(ops, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+                row.addView(Ui.sep(act))
+                slist.addView(row)
+                i++
+            }
+
+            tlist.removeAllViews()
+            val t = store.templates()
+            var j = 0
+            while (j < t.length()) {
+                val o = t.getJSONObject(j)
+                val idx = j
+                val row = Ui.col(act)
+                row.setPadding(0, Ui.dp(act, 6), 0, Ui.dp(act, 6))
+                row.addView(Ui.tv(act, o.optString("title"), 14f, Ui.FG, true))
+                row.addView(Ui.tv(act, o.optString("body"), 11f, Ui.SUB))
+                val ops = Ui.row(act)
+                ops.addView(Ui.ghost(act, "送信", Ui.CYAN) {
+                    sendTts(targetSpec, o.optString("body"), false)
+                }, cw())
+                ops.addView(Ui.ghost(act, "削除", Ui.RED) {
+                    val out = JSONArray()
+                    var k = 0
+                    while (k < t.length()) {
+                        if (k != idx) out.put(t.getJSONObject(k))
+                        k++
+                    }
+                    store.saveTemplates(out)
+                    refresh()
+                }, cw())
+                row.addView(ops, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+                row.addView(Ui.sep(act))
+                tlist.addView(row)
+                j++
+            }
+        }
+        return Ui.scroll(act, l)
+    }
+
+    private fun scheduleDialog(editIdx: Int?) {
+        val arr = store.schedules()
+        val cur = if (editIdx != null && editIdx < arr.length()) arr.getJSONObject(editIdx) else null
+
+        val box = Ui.col(act, 16)
+        val title = Ui.edit(act, "名称（例: 朝礼）", cur?.optString("title") ?: "")
+        val hour = Ui.edit(act, "時", (cur?.optInt("hour") ?: 8).toString(), true)
+        val min = Ui.edit(act, "分", (cur?.optInt("min") ?: 30).toString(), true)
+        val body = Ui.edit(act, "読み上げ文", cur?.optString("text") ?: "")
+        body.setSingleLine(false)
+
+        box.addView(Ui.tv(act, "名称", 11f, Ui.SUB))
+        box.addView(title, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        val hm = Ui.row(act)
+        hm.addView(hour, cw())
+        hm.addView(min, cw())
+        box.addView(Ui.tv(act, "時刻（24時間制）", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        box.addView(hm, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(Ui.tv(act, "読み上げ文", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        box.addView(body, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
+        var mode = cur?.optString("mode") ?: "daily"
+        val modeBtn = Ui.ghost(act, "", Ui.FG) { }
+        modeBtn.text = if (mode == "weekday") "繰り返し: 平日のみ" else "繰り返し: 毎日"
+        modeBtn.setOnClickListener {
+            mode = if (mode == "weekday") "daily" else "weekday"
+            modeBtn.text = if (mode == "weekday") "繰り返し: 平日のみ" else "繰り返し: 毎日"
+        }
+        box.addView(modeBtn, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        var spec = cur?.optString("target") ?: "all"
+        val tgtBtn = Ui.ghost(act, "", Ui.FG) { }
+        tgtBtn.text = "対象: " + Targeting.label(spec)
+        tgtBtn.setOnClickListener {
+            val opts = ArrayList<String>()
+            val specs = ArrayList<String>()
+            opts.add("全館"); specs.add("all")
+            for (f in Registry.floors()) { opts.add("${f}階"); specs.add("floor:$f") }
+            for (g in Registry.groups()) { opts.add("グループ $g"); specs.add("group:$g") }
+            AlertDialog.Builder(act).setTitle("対象")
+                .setItems(opts.toTypedArray()) { _, i ->
+                    spec = specs[i]
+                    tgtBtn.text = "対象: " + Targeting.label(spec)
+                }.show()
+        }
+        box.addView(tgtBtn, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+
+        AlertDialog.Builder(act)
+            .setTitle(if (cur == null) "予約を追加" else "予約を編集")
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("閉じる", null)
+            .setPositiveButton("保存") { _, _ ->
+                val o = cur ?: JSONObject()
+                o.put("title", title.text.toString().ifBlank { "定時放送" })
+                o.put("hour", (hour.text.toString().toIntOrNull() ?: 8).coerceIn(0, 23))
+                o.put("min", (min.text.toString().toIntOrNull() ?: 0).coerceIn(0, 59))
+                o.put("text", body.text.toString())
+                o.put("mode", mode)
+                o.put("target", spec)
+                o.put("enabled", true)
+                o.put("chime", true)
+                if (cur == null) arr.put(o)
+                store.saveSchedules(arr)
+                store.log("schedule", "予約を保存: ${o.optString("title")}")
+                render()
+            }
+            .show()
+    }
+
+    private fun addSchedule(
+        hour: Int, minute: Int, mode: String, target: String, title: String, text: String
+    ) {
+        if (hour < 0) {
+            act.toast("時刻を解釈できませんでした")
+            return
+        }
+        val arr = store.schedules()
+        val o = JSONObject()
+        o.put("title", title.ifBlank { "定時放送" })
+        o.put("hour", hour.coerceIn(0, 23))
+        o.put("min", minute.coerceIn(0, 59))
+        o.put("text", text.ifBlank { title })
+        o.put("mode", mode)
+        o.put("target", target)
+        o.put("enabled", true)
+        o.put("chime", true)
+        arr.put(o)
+        store.saveSchedules(arr)
+        store.log("schedule", "AIアシスタントが予約を登録: $title")
+    }
+
+    private fun templateDialog() {
+        val box = Ui.col(act, 16)
+        val t = Ui.edit(act, "タイトル")
+        val b = Ui.edit(act, "本文")
+        b.setSingleLine(false)
+        box.addView(t)
+        box.addView(b, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        AlertDialog.Builder(act)
+            .setTitle("定型文を追加")
+            .setView(box)
+            .setNegativeButton("閉じる", null)
+            .setPositiveButton("保存") { _, _ ->
+                val arr = store.templates()
+                val o = JSONObject()
+                o.put("title", t.text.toString().ifBlank { "定型文" })
+                o.put("body", b.text.toString())
+                arr.put(o)
+                store.saveTemplates(arr)
+                render()
+            }
+            .show()
+    }
+
+    // ============================================================ 5 ログ
+    private var logFilterToday = false
+
+    private fun tabLog(): View {
+        val l = Ui.col(act, 14)
+        val head = Ui.row(act)
+        head.addView(Ui.tv(act, "📜 ログ", 17f, Ui.FG, true), LinearLayout.LayoutParams(0, Ui.WC, 1f))
+        val fb = Ui.ghost(act, "", Ui.CYAN) { }
+        fb.text = if (logFilterToday) "今日のみ" else "すべて"
+        fb.setOnClickListener {
+            logFilterToday = !logFilterToday
+            render()
+        }
+        head.addView(fb)
+        head.addView(Ui.ghost(act, "消去", Ui.RED) {
+            store.clearLogs()
+            render()
+        })
+        l.addView(head)
+
+        val list = Ui.col(act)
+        l.addView(list, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        l.addView(Ui.space(act, 20))
+
+        refreshers.add {
+            list.removeAllViews()
+            val a = store.logs()
+            var shown = 0
+            var i = 0
+            while (i < a.length() && shown < 200) {
+                val o = a.getJSONObject(i)
+                i++
+                val at = o.optLong("at")
+                if (logFilterToday && !Store.today(at)) continue
+                shown++
+                val row = Ui.row(act)
+                row.setPadding(0, Ui.dp(act, 5), 0, Ui.dp(act, 5))
+                val kind = o.optString("kind")
+                val col = when (kind) {
+                    "emergency" -> Ui.RED
+                    "broadcast" -> Ui.ACC
+                    "call" -> Ui.CYAN
+                    "schedule" -> Ui.GREEN
+                    "security" -> Ui.RED
+                    else -> Ui.SUB
+                }
+                row.addView(Ui.tv(act, Store.stamp(at), 10f, Ui.SUB), LinearLayout.LayoutParams(Ui.dp(act, 92), Ui.WC))
+                val body = Ui.col(act)
+                body.addView(Ui.tv(act, o.optString("text"), 12f, Ui.FG))
+                body.addView(Ui.tv(act, kind, 9f, col))
+                row.addView(body, LinearLayout.LayoutParams(0, Ui.WC, 1f))
+                list.addView(row)
+            }
+            if (shown == 0) list.addView(Ui.tv(act, "ログはありません。", 12f, Ui.SUB))
+        }
+        return Ui.scroll(act, l)
+    }
+
+    // ============================================================ 6 設定
+    private fun tabSettings(): View {
+        val l = Ui.col(act, 14)
+
+        val c0 = Ui.card(act)
+        c0.addView(Ui.tv(act, "🏢 建物", 16f, Ui.FG, true))
+        val bn = Ui.edit(act, "建物名", store.building)
+        c0.addView(bn, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        val fl = Ui.edit(act, "フロア数", store.floors.toString(), true)
+        c0.addView(fl, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        c0.addView(Ui.btn(act, "保存") {
+            store.building = bn.text.toString().ifBlank { store.building }
+            store.floors = fl.text.toString().toIntOrNull() ?: store.floors
+            act.toast("保存しました")
+            refresh()
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        l.addView(c0)
+
+        val c1 = Ui.card(act)
+        c1.addView(Ui.tv(act, "🎚 音声", 16f, Ui.FG, true))
+        val q = Ui.ghost(act, "", Ui.FG) { }
+        q.text = if (store.quality == "low") "音質: 低帯域（8kHz・弱電波向け）" else "音質: 高音質（16kHz）"
+        q.setOnClickListener {
+            store.quality = if (store.quality == "low") "high" else "low"
+            q.text = if (store.quality == "low") "音質: 低帯域（8kHz・弱電波向け）" else "音質: 高音質（16kHz）"
+        }
+        c1.addView(q, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+
+        val ag = Ui.ghost(act, "", Ui.FG) { }
+        ag.text = if (store.autoGain) "自動音量調整(AGC): ON" else "自動音量調整(AGC): OFF"
+        ag.setOnClickListener {
+            store.autoGain = !store.autoGain
+            ag.text = if (store.autoGain) "自動音量調整(AGC): ON" else "自動音量調整(AGC): OFF"
+        }
+        c1.addView(ag, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        val hint = Ui.tv(act, "", 11f, Ui.CYAN)
+        c1.addView(hint, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        l.addView(c1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        val c2 = Ui.card(act)
+        c2.addView(Ui.tv(act, "🔐 セキュリティ", 16f, Ui.FG, true))
+        val p1 = Ui.edit(act, "新しいPIN", "", true)
+        c2.addView(p1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        c2.addView(Ui.btn(act, "PINを変更") {
+            val v = p1.text.toString()
+            if (v.length < 4) act.toast("4桁以上で設定してください")
+            else {
+                store.pin = v
+                store.log("security", "管理PINを変更")
+                act.toast("変更しました")
+            }
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        l.addView(c2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        val c3 = Ui.card(act)
+        c3.addView(Ui.tv(act, "🛠 システム", 16f, Ui.FG, true))
+        c3.addView(
+            Ui.tv(
+                act,
+                "コンソールIP ${Net.localIp()}\n制御 TCP ${Proto.PORT_CTRL} / 探索 UDP ${Proto.PORT_ANNOUNCE}\n" +
+                        "音声 下り UDP ${Proto.PORT_AUDIO_DOWN} / 上り UDP ${Proto.PORT_AUDIO_UP}\nバージョン ${Proto.APP_VER}",
+                11f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8))
+        )
+        c3.addView(Ui.ghost(act, "端末台帳をリセット", Ui.RED) {
+            Registry.clear()
+            Registry.save(store)
+            act.toast("台帳を消去しました")
+            render()
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        c3.addView(Ui.ghost(act, "この端末の役割を変更", Ui.ACC) {
+            act.switchMode()
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        l.addView(c3, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        l.addView(Ui.space(act, 20))
+
+        refreshers.add {
+            val s = Diag.suggestQuality(Registry.all())
+            hint.text = if (s == "low") "AI推奨: 遅延/電波状況から低帯域モードを推奨します。"
+            else "AI推奨: 現在の回線品質なら高音質で問題ありません。"
+        }
+        return Ui.scroll(act, l)
+    }
+}
