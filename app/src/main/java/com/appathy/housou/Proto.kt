@@ -13,10 +13,13 @@ object Proto {
     /** 端末 -> コンソール の音声UDP（通話用） */
     const val PORT_AUDIO_UP = 45303
 
+    /** コンソールの外部トリガー受付（HTTP GET） */
+    const val PORT_TRIGGER = 45304
+
     const val RATE_HIGH = 16000
     const val RATE_LOW = 8000
 
-    const val APP_VER = "1.1.1"
+    const val APP_VER = "1.2"
 
     /** この時間、アナウンス/応答が無ければオフライン扱い */
     const val OFFLINE_MS = 14000L

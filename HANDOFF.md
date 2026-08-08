@@ -1,7 +1,7 @@
 # HANDOFF — HousouApp（放送室）
 
 ## 現況
-v1.1 / versionCode 2。Kotlin、UIは全てコード生成（XMLレイアウトなし）。
+v1.2 / versionCode 4。Kotlin、UIは全てコード生成（XMLレイアウトなし）。
 1APK 2ロール（console / terminal）。`Store.mode` で分岐し `MainActivity.route()` が画面を決める。
 
 ## ファイル構成
@@ -19,6 +19,8 @@ v1.1 / versionCode 2。Kotlin、UIは全てコード生成（XMLレイアウト�
 | `Qr.kt` / `ScanActivity.kt` | 端末登録QRの生成とCameraX読み取り |
 | `Suggest.kt` | ログ分析によるAI放送支援（放送先/予約/お気に入り） |
 | `Alerts.kt` | 端末異常の管理者通知（状態変化時のみ） |
+| `Trend.kt` | 観測値の時系列蓄積と故障予兆検知（最小二乗法の傾き） |
+| `Disaster.kt` | 災害シナリオ定義（6種） |
 | `Diag.kt` | AI推論ルール（スコア、アラート、障害推定、帯域推奨） |
 | `Assistant.kt` | 日本語自然言語→操作意図のローカル写像 |
 | `TerminalService.kt` | 子機常駐（アナウンス・制御サーバ・受話・TTS） |
@@ -43,13 +45,19 @@ v1.1 / versionCode 2。Kotlin、UIは全てコード生成（XMLレイアウト�
 - **ログは `store.log(kind, text, target, tag)`** で対象と定型文名まで残す。`Suggest` はこの2つのフィールドだけを見ている。
 - **通話は従来どおり `ConsoleService.startTx`（`Audio.Sender`）**。Mixerとマイクを奪い合うため、`startPtt()` で通話中を弾いている。
 
+## v1.2 で追加した約束
+
+- **建物スコープは `Targeting.scope`**（空文字＝すべて）。`Registry.scoped()` / `floors()` / `groups()` はこれを見る。新しい絞り込みを足すときも `Targeting.resolve()` に集約する。
+- **災害放送は `ConsoleService.startDisaster()` が唯一の入口**。UIも外部トリガーもここを呼ぶ。停止は `disasterOn = false` を立てるだけで、後片付けは `finishDisaster()` が担当する。
+- **予兆判定は `Trend.omens()`**。現在値の評価は `Diag`、時間変化は `Trend` と役割を分ける。サンプリングは `ConsoleService` のポーリングから5分間隔で呼ぶ。
+- **外部トリガーは必ずPIN照合**。`handleTrigger()` の先頭で弾き、失敗もログに残す。
+
 ## 次にやるなら
 
-1. **災害時自動放送** — `ConsoleService.startScheduler()` と同じ枠組みで、緊急地震速報インテント受信をトリガに `tts(urgent=true)` を全館送出
-2. **複数建物** — `Store.building` を配列化し、`Dev` に `buildingId` を追加
-3. **故障予兆検知** — `Diag.score` の時系列を保存し、劣化トレンドで予告する
-4. **SIP/IP電話連携** — 通話系統を SIP スタックに差し替え。`Audio.Sender/Receiver` の口は流用できる
-5. **Bluetoothスピーカー** — 端末側 `Audio.Player` の AudioAttributes を切替
+1. **SIP/IP電話連携** — 通話系統を SIP スタックに差し替え。`Audio.Sender/Receiver` の口は流用できる
+2. **Bluetoothスピーカー** — 端末側 `Audio.Player` の AudioAttributes を切替
+3. **VPN遠隔放送** — 現状も手動IP登録で動くが、NAT越えとキープアライブの設計が要る
+4. **予兆の学習** — 現在は固定閾値。端末ごとの平常値を学習してから逸脱を見る方が誤検知が減る
 
 ## 既知の注意点
 
@@ -59,3 +67,5 @@ v1.1 / versionCode 2。Kotlin、UIは全てコード生成（XMLレイアウト�
 - BGM/音声ファイルもコンソールが送出元。コンソールのプロセスが落ちると止まる
 - QR読み取りにはカメラ権限が要る。初回は `ScanActivity` 内で要求する
 - 長尺音源は取り込み時に全デコードするため、15分でクリップされる（`Decoder.MAX_SECONDS`）
+- 予兆判定は最低6サンプル（30分）必要。それ未満は蓄積中と表示する
+- 外部トリガーはHTTP平文。LAN内前提で、インターネットに露出させない

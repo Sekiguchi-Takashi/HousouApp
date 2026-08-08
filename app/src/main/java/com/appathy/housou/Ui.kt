@@ -143,6 +143,35 @@ object Ui {
         return e
     }
 
+    /** 折れ線スパークライン */
+    fun spark(c: Context, values: List<Float>, color: Int, h: Int = 46): View {
+        val v = object : View(c) {
+            private val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+            override fun onDraw(cv: android.graphics.Canvas) {
+                if (values.size < 2) return
+                val w = width.toFloat()
+                val ht = height.toFloat()
+                var mn = values.min()
+                var mx = values.max()
+                if (mx - mn < 1f) { mx = mn + 1f }
+                val path = android.graphics.Path()
+                var i = 0
+                while (i < values.size) {
+                    val x = w * i / (values.size - 1)
+                    val y = ht - (values[i] - mn) / (mx - mn) * (ht - 4f) - 2f
+                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                    i++
+                }
+                p.style = android.graphics.Paint.Style.STROKE
+                p.strokeWidth = dp(c, 2).toFloat()
+                p.color = color
+                cv.drawPath(path, p)
+            }
+        }
+        v.layoutParams = LinearLayout.LayoutParams(MP, dp(c, h))
+        return v
+    }
+
     fun sep(c: Context): View {
         val v = View(c)
         v.setBackgroundColor(LINE)

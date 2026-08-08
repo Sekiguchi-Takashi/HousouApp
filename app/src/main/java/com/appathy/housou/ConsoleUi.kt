@@ -264,6 +264,23 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         stats.addView(s3, LinearLayout.LayoutParams(0, Ui.WC, 1f))
         l.addView(c1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
 
+        // 災害放送バナー
+        val cD = Ui.card(act, 0xFF3A0E0E.toInt())
+        val dText = Ui.tv(act, "", 15f, Ui.FG, true)
+        cD.addView(dText)
+        cD.addView(Ui.ghost(act, "■ 災害放送を停止", Ui.RED) {
+            ConsoleService.instance?.stopDisaster()
+            act.toast("停止しました")
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        l.addView(cD, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        // 故障予兆
+        val cO = Ui.card(act)
+        cO.addView(Ui.tv(act, "📉 故障予兆", 16f, Ui.FG, true))
+        val omens = Ui.col(act)
+        cO.addView(omens, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        l.addView(cO, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
         // AI放送支援
         val cS = Ui.card(act)
         cS.addView(Ui.tv(act, "💡 AIのおすすめ", 16f, Ui.FG, true))
@@ -298,6 +315,36 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             val on = all.filter { it.online && it.rtt >= 0 }
             (s3.getChildAt(1) as TextView).text =
                 if (on.isEmpty()) "-" else (on.sumOf { it.rtt } / on.size).toString() + "ms"
+
+            cD.visibility = if (ConsoleService.disasterOn) View.VISIBLE else View.GONE
+            if (ConsoleService.disasterOn) {
+                dText.text = "🚨 ${ConsoleService.disasterName} を放送中" +
+                        "（${ConsoleService.disasterRound}/${ConsoleService.disasterTotal}回目）"
+            }
+
+            omens.removeAllViews()
+            val om = Trend.omens(store, all)
+            if (om.isEmpty()) {
+                val n = if (all.isEmpty()) 0 else Trend.points(store, all[0].id)
+                omens.addView(
+                    Ui.tv(
+                        act,
+                        if (n < 6) "観測データを蓄積中です（5分ごとに記録、判定には30分ほど必要）。"
+                        else "悪化傾向のある端末はありません。",
+                        12f, Ui.SUB
+                    )
+                )
+            } else {
+                for (o in om) {
+                    val row = Ui.col(act)
+                    row.setPadding(0, Ui.dp(act, 6), 0, Ui.dp(act, 6))
+                    row.addView(
+                        Ui.tv(act, o.title, 13f, if (o.level >= 3) Ui.RED else Ui.ACC, true)
+                    )
+                    row.addView(Ui.tv(act, o.detail, 11f, Ui.SUB))
+                    omens.addView(row)
+                }
+            }
 
             sug.removeAllViews()
             val items = Suggest.build(store)
@@ -421,6 +468,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         r1.addView(chip("全館") { targetSpec = "all"; render() }, cw())
         r1.addView(chip("フロア") { pickFloor() }, cw())
         r1.addView(chip("グループ") { pickGroup() }, cw())
+        r1.addView(chip("建物") { pickBuilding() }, cw())
         r1.addView(chip("個別") { pickDevice() }, cw())
         c0.addView(r1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
         l.addView(c0)
@@ -531,6 +579,29 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             }.show()
     }
 
+    /** 建物スコープの切り替え。以降の全館/フロア/グループがこの建物に限定される */
+    private fun pickBuilding() {
+        val bs = Registry.buildings()
+        if (bs.isEmpty()) {
+            act.toast("建物名が設定された端末がありません")
+            return
+        }
+        val items = ArrayList<String>()
+        items.add("すべての建物")
+        items.addAll(bs)
+        AlertDialog.Builder(act).setTitle("建物を選択")
+            .setItems(items.toTypedArray()) { _, i ->
+                if (i == 0) {
+                    Targeting.scope = ""
+                    targetSpec = "all"
+                } else {
+                    Targeting.scope = items[i]
+                    targetSpec = "bldg:" + items[i]
+                }
+                render()
+            }.show()
+    }
+
     private fun pickGroup() {
         val gs = Registry.groups()
         if (gs.isEmpty()) {
@@ -597,6 +668,61 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             ui { act.toast("チャイムを送信しました (${targets.size}台)") }
         }
         store.log("broadcast", "チャイム → ${Targeting.label(spec)}", spec, "チャイム")
+    }
+
+    /** 災害シナリオを選んで自動反復放送を開始する */
+    private fun disasterDialog() {
+        if (ConsoleService.disasterOn) {
+            AlertDialog.Builder(act)
+                .setTitle("災害放送を停止しますか")
+                .setMessage("${ConsoleService.disasterName} を放送中です（${ConsoleService.disasterRound}/${ConsoleService.disasterTotal}回目）。")
+                .setPositiveButton("停止する") { _, _ ->
+                    ConsoleService.instance?.stopDisaster()
+                    act.toast("停止しました")
+                }
+                .setNegativeButton("続行", null)
+                .show()
+            return
+        }
+
+        val box = Ui.col(act, 4)
+        box.addView(
+            Ui.tv(act, "対象: ${Targeting.label(targetSpec)}　選ぶとすぐに放送を開始します。", 12f, Ui.SUB)
+        )
+        box.addView(
+            Ui.tv(act, "対象端末は自動で最大音量になり、画面が警報表示に切り替わります。", 11f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+        )
+
+        var dlg: AlertDialog? = null
+        for (sc in Disaster.all) {
+            val row = Ui.col(act)
+            row.setPadding(0, Ui.dp(act, 8), 0, Ui.dp(act, 8))
+            row.addView(Ui.tv(act, "${sc.icon} ${sc.name}", 16f, Ui.FG, true))
+            row.addView(Ui.tv(act, sc.text, 11f, Ui.SUB))
+            row.addView(
+                Ui.tv(act, "${sc.intervalSec}秒間隔で最大${sc.repeat}回くり返し", 11f, Ui.ACC),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+            )
+            row.addView(
+                Ui.btn(act, "この内容で開始", 0xFF8E1111.toInt(), Ui.FG) {
+                    ConsoleService.instance?.startDisaster(sc.id, targetSpec)
+                    act.toast("${sc.name} の災害放送を開始しました")
+                    dlg?.dismiss()
+                    render()
+                },
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+            )
+            row.addView(Ui.sep(act))
+            box.addView(row)
+        }
+
+        dlg = AlertDialog.Builder(act)
+            .setTitle("🌏 災害放送")
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("閉じる", null)
+            .create()
+        dlg.show()
     }
 
     private fun sendTts(spec: String, text: String, urgent: Boolean, tag: String = "") {
@@ -850,6 +976,35 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         box.addView(floor, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
         box.addView(Ui.tv(act, "グループ", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
         box.addView(grp, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        val bldg = Ui.edit(act, "建物名", d.building)
+        box.addView(Ui.tv(act, "建物", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        box.addView(bldg, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
+        // 状態の推移
+        val hist = Trend.series(store, d.id, "s")
+        if (hist.size >= 2) {
+            box.addView(
+                Ui.tv(act, "リスクスコアの推移（直近${hist.size}点 / 5分間隔）", 11f, Ui.SUB),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14))
+            )
+            box.addView(Ui.spark(act, hist, Diag.color(hist.last().toInt())))
+            val rs = Trend.series(store, d.id, "r")
+            if (rs.size >= 2) {
+                box.addView(
+                    Ui.tv(act, "電波強度の推移", 11f, Ui.SUB),
+                    Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10))
+                )
+                box.addView(Ui.spark(act, rs, Ui.CYAN))
+            }
+            val bsr = Trend.series(store, d.id, "b")
+            if (bsr.size >= 2) {
+                box.addView(
+                    Ui.tv(act, "バッテリー残量の推移", 11f, Ui.SUB),
+                    Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10))
+                )
+                box.addView(Ui.spark(act, bsr, Ui.GREEN))
+            }
+        }
 
         box.addView(Ui.tv(act, "音量  ${d.volume}%", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
         val sb = SeekBar(act)
@@ -916,14 +1071,16 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                 val nm = name.text.toString().ifBlank { d.name }
                 val fl = floor.text.toString().toIntOrNull() ?: d.floor
                 val gp = grp.text.toString().ifBlank { d.group }
+                val bd = bldg.text.toString().trim()
                 bg {
                     val q = Net.cmd("set_info")
                     q.put("name", nm)
                     q.put("floor", fl)
                     q.put("group", gp)
+                    q.put("bldg", bd)
                     Net.ctrl(d.ip, q, 3000)
                 }
-                d.name = nm; d.floor = fl; d.group = gp
+                d.name = nm; d.floor = fl; d.group = gp; d.building = bd
                 Registry.save(store)
                 render()
             }
@@ -1459,11 +1616,43 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
     }
 
     // ============================================================ 6 設定
+    /** 外部トリガーの使い方 */
+    private fun triggerCard(): LinearLayout {
+        val c = Ui.card(act)
+        c.addView(Ui.tv(act, "🔗 外部トリガー", 16f, Ui.FG, true))
+        c.addView(
+            Ui.tv(
+                act,
+                "IFTTT・Termux・cron などから下記を叩くと災害放送を開始できます。同一LAN内からのみ受け付けます。",
+                11f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
+        val url = "http://${Net.localIp()}:${Proto.PORT_TRIGGER}/fire?s=quake&pin=${store.pin}"
+        c.addView(Ui.tv(act, url, 11f, Ui.ACC), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        c.addView(
+            Ui.tv(
+                act,
+                "s に指定できる値: " + Disaster.all.joinToString(" / ") { it.id } +
+                        "　停止は s=stop。target=floor:3 のように対象も指定できます。",
+                11f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8))
+        )
+        return c
+    }
+
     private fun tabSettings(): View {
         val l = Ui.col(act, 14)
 
         val c0 = Ui.card(act)
         c0.addView(Ui.tv(act, "🏢 建物", 16f, Ui.FG, true))
+        c0.addView(
+            Ui.tv(
+                act,
+                "この名前が端末に配られ、複数建物の切り分けに使われます。現在のスコープ: " +
+                        (if (Targeting.scope.isEmpty()) "すべての建物" else Targeting.scope),
+                11f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
         val bn = Ui.edit(act, "建物名", store.building)
         c0.addView(bn, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
         val fl = Ui.edit(act, "フロア数", store.floors.toString(), true)
@@ -1475,6 +1664,8 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             refresh()
         }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
         l.addView(c0)
+
+        l.addView(triggerCard(), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
 
         val c1 = Ui.card(act)
         c1.addView(Ui.tv(act, "🎚 音声", 16f, Ui.FG, true))

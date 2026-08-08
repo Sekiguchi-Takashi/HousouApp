@@ -37,7 +37,7 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
     private fun tick() {
         if (!attached) return
         render()
-        h.postDelayed({ tick() }, 2000)
+        h.postDelayed({ tick() }, if (TerminalService.alertOn) 700 else 2000)
     }
 
     private fun startService() {
@@ -63,6 +63,10 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
 
     private fun render() {
         if (!attached) return
+        if (TerminalService.alertOn) {
+            renderAlert()
+            return
+        }
         val busy = TerminalService.playing || TerminalService.talking
         val bg = if (busy) 0xFF3A0E0E.toInt() else Ui.BG
 
@@ -146,6 +150,41 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         val note = Ui.tv(act, "画面を消しても常駐します。電源に接続した状態での運用を推奨します。", 11f, Ui.SUB)
         note.gravity = Gravity.CENTER
         l.addView(note, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 22)))
+
+        root.removeAllViews()
+        root.addView(Ui.scroll(act, l))
+    }
+
+    /** 災害放送を受信している間の全画面警報表示 */
+    private var flash = false
+
+    private fun renderAlert() {
+        flash = !flash
+        val l = Ui.col(act, 24)
+        l.setBackgroundColor(if (flash) 0xFF7A0B0B.toInt() else 0xFF3A0E0E.toInt())
+        l.gravity = Gravity.CENTER_HORIZONTAL
+
+        val icon = Ui.tv(act, "⚠", 72f)
+        icon.gravity = Gravity.CENTER
+        l.addView(icon, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 24)))
+
+        val ttl = Ui.tv(act, TerminalService.alertName, 40f, 0xFFFFFFFF.toInt(), true)
+        ttl.gravity = Gravity.CENTER
+        l.addView(ttl, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+
+        val sub = Ui.tv(act, "緊 急 放 送", 20f, 0xFFFFD5D5.toInt(), true)
+        sub.gravity = Gravity.CENTER
+        l.addView(sub, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+
+        if (TerminalService.alertText.isNotEmpty()) {
+            val body = Ui.tv(act, TerminalService.alertText, 17f, 0xFFFFFFFF.toInt())
+            body.gravity = Gravity.CENTER
+            l.addView(body, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 24)))
+        }
+
+        val nm = Ui.tv(act, "${store.termFloor}F ${store.termName}", 14f, 0xFFFFC9C9.toInt())
+        nm.gravity = Gravity.CENTER
+        l.addView(nm, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 28)))
 
         root.removeAllViews()
         root.addView(Ui.scroll(act, l))

@@ -43,6 +43,12 @@ class ConsoleService : Service() {
         @Volatile var calling = false
         @Volatile var callTargetId = ""
 
+        // ---- 災害放送
+        @Volatile var disasterOn = false
+        @Volatile var disasterName = ""
+        @Volatile var disasterRound = 0
+        @Volatile var disasterTotal = 0
+
         var onUpdate: (() -> Unit)? = null
 
         fun push() {
@@ -93,6 +99,8 @@ class ConsoleService : Service() {
     private var discoverTh: Thread? = null
     private var pollTh: Thread? = null
     private var schedTh: Thread? = null
+    private var disasterTh: Thread? = null
+    private var trigger: java.net.ServerSocket? = null
     private var mcLock: WifiManager.MulticastLock? = null
     private var wake: PowerManager.WakeLock? = null
 
@@ -110,6 +118,7 @@ class ConsoleService : Service() {
         startDiscovery()
         startPolling()
         startScheduler()
+        startTrigger()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -150,6 +159,147 @@ class ConsoleService : Service() {
         } catch (e: Exception) {
             try { startForeground(NOTI_ID, n) } catch (e2: Exception) { }
         }
+    }
+
+    // ============================================================ 災害放送
+    /**
+     * 対象を最大音量にし、警報チャイム＋読み上げを繰り返す。
+     * 停止されるまで、または規定回数まで継続する。
+     */
+    fun startDisaster(scenarioId: String, spec: String, customText: String = "") {
+        if (disasterOn) return
+        val sc = Disaster.byId(scenarioId) ?: return
+        val text = if (customText.isNotEmpty()) customText else sc.text
+        disasterOn = true
+        disasterName = sc.name
+        disasterRound = 0
+        disasterTotal = sc.repeat
+
+        val t = Thread {
+            try {
+                val targets = Targeting.resolve(spec)
+                // 端末を警報表示に切り替え、音量を最大化
+                val on = Net.cmd("alert")
+                on.put("on", true)
+                on.put("name", sc.name)
+                on.put("text", text)
+                for (d in targets) {
+                    Net.ctrl(d.ip, Net.cmd("volume").put("value", 100), 2000)
+                    Net.ctrl(d.ip, on, 2000)
+                }
+                store.log(
+                    "emergency", "災害放送を開始: ${sc.name} → ${Targeting.label(spec)}",
+                    spec, sc.name
+                )
+                push()
+
+                var r = 0
+                while (disasterOn && r < sc.repeat) {
+                    r++
+                    disasterRound = r
+                    push()
+                    val req = Net.cmd("tts")
+                    req.put("text", text)
+                    req.put("urgent", true)
+                    req.put("chime", true)
+                    val live = Targeting.resolve(spec)
+                    for (d in live) Net.ctrl(d.ip, req, 4000)
+
+                    var waited = 0
+                    val total = sc.intervalSec * 10
+                    while (disasterOn && waited < total) {
+                        try { Thread.sleep(100) } catch (e: Exception) { }
+                        waited++
+                    }
+                }
+            } catch (e: Exception) {
+            } finally {
+                finishDisaster(spec)
+            }
+        }
+        disasterTh = t
+        t.start()
+    }
+
+    private fun finishDisaster(spec: String) {
+        val was = disasterName
+        disasterOn = false
+        disasterName = ""
+        disasterRound = 0
+        try {
+            val off = Net.cmd("alert")
+            off.put("on", false)
+            for (d in Targeting.resolve(spec)) Net.ctrl(d.ip, off, 2000)
+        } catch (e: Exception) { }
+        store.log("emergency", "災害放送を終了: $was")
+        push()
+    }
+
+    fun stopDisaster() {
+        disasterOn = false
+    }
+
+    /**
+     * 外部トリガー受付。IFTTT / Termux / cron などから
+     *   http://<コンソールIP>:45304/fire?s=quake&pin=0000
+     * を叩くと災害放送を開始できる。停止は s=stop。
+     */
+    private fun startTrigger() {
+        Thread {
+            try {
+                val ss = java.net.ServerSocket(Proto.PORT_TRIGGER)
+                trigger = ss
+                while (alive) {
+                    val sock = ss.accept()
+                    try {
+                        sock.soTimeout = 3000
+                        val br = sock.getInputStream().bufferedReader()
+                        val line = br.readLine() ?: ""
+                        val body = handleTrigger(line)
+                        val w = sock.getOutputStream().bufferedWriter()
+                        w.write("HTTP/1.1 200 OK\r\n")
+                        w.write("Content-Type: text/plain; charset=utf-8\r\n")
+                        w.write("Connection: close\r\n\r\n")
+                        w.write(body)
+                        w.flush()
+                    } catch (e: Exception) {
+                    } finally {
+                        try { sock.close() } catch (e: Exception) { }
+                    }
+                }
+            } catch (e: Exception) { }
+        }.start()
+    }
+
+    private fun handleTrigger(line: String): String {
+        if (!line.startsWith("GET")) return "bad request"
+        val path = line.split(" ").getOrNull(1) ?: return "bad request"
+        val q = path.substringAfter("?", "")
+        val params = HashMap<String, String>()
+        for (kv in q.split("&")) {
+            val i = kv.indexOf('=')
+            if (i > 0) params[kv.substring(0, i)] = decode(kv.substring(i + 1))
+        }
+        if (params["pin"] != store.pin) {
+            store.log("alert", "外部トリガーのPIN不一致を拒否")
+            return "denied"
+        }
+        val sName = params["s"] ?: return "missing s"
+        if (sName == "stop") {
+            stopDisaster()
+            return "stopped"
+        }
+        val spec = params["target"] ?: "all"
+        val sc = Disaster.byId(sName) ?: return "unknown scenario"
+        store.log("emergency", "外部トリガーを受信: ${sc.name}")
+        startDisaster(sc.id, spec, params["text"] ?: "")
+        return "fired ${sc.id}"
+    }
+
+    private fun decode(s: String): String = try {
+        java.net.URLDecoder.decode(s, "UTF-8")
+    } catch (e: Exception) {
+        s
     }
 
     private fun acquireLocks() {
@@ -231,6 +381,7 @@ class ConsoleService : Service() {
                     }
                 }
                 try { Alerts.evaluate(this, store, Registry.all()) } catch (e: Exception) { }
+                try { Trend.sample(store, Registry.all()) } catch (e: Exception) { }
                 push()
                 var i = 0
                 while (i < 40 && alive) {
@@ -313,6 +464,8 @@ class ConsoleService : Service() {
         running = false
         instance = null
         try { Mixer.stopAll() } catch (e: Exception) { }
+        stopDisaster()
+        try { trigger?.close() } catch (e: Exception) { }
         stopTx()
         stopCallRx()
         try { mcLock?.release() } catch (e: Exception) { }
@@ -323,8 +476,17 @@ class ConsoleService : Service() {
 
 /** 放送対象の指定を端末リストへ解決する */
 object Targeting {
+
+    /** 現在の建物スコープ。空文字ならすべての建物 */
+    @Volatile
+    var scope: String = ""
+
     fun resolve(spec: String): List<Dev> {
-        val on = Registry.online()
+        val on = Registry.online().filter { scope.isEmpty() || it.building == scope }
+        if (spec.startsWith("bldg:")) {
+            val b = spec.substring(5)
+            return Registry.online().filter { it.building == b }
+        }
         if (spec == "all" || spec.isEmpty()) return on
         if (spec.startsWith("floor:")) {
             val f = spec.substring(6).toIntOrNull() ?: return on
@@ -342,7 +504,10 @@ object Targeting {
     }
 
     fun label(spec: String): String {
-        if (spec == "all" || spec.isEmpty()) return "全館"
+        if (spec.startsWith("bldg:")) return spec.substring(5)
+        if (spec == "all" || spec.isEmpty()) {
+            return if (scope.isEmpty()) "全館" else "$scope 全館"
+        }
         if (spec.startsWith("floor:")) return spec.substring(6) + "階"
         if (spec.startsWith("group:")) return "グループ " + spec.substring(6)
         if (spec.startsWith("dev:")) {

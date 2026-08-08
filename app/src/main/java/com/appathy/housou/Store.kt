@@ -17,6 +17,10 @@ class Store(ctx: Context) {
     private fun s(k: String, d: String) = p.getString(k, d) ?: d
     private fun put(k: String, v: String) = p.edit().putString(k, v).apply()
 
+    /** 任意キーの読み書き（Trend など補助モジュール用） */
+    fun raw(k: String, d: String): String = s(k, d)
+    fun setRaw(k: String, v: String) = put(k, v)
+
     /** "" / "console" / "terminal" */
     var mode: String
         get() = s("mode", "")

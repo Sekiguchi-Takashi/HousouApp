@@ -46,6 +46,9 @@ class TerminalService : Service() {
 
         @Volatile var running = false
         @Volatile var consoleIp = ""
+        @Volatile var alertOn = false
+        @Volatile var alertName = ""
+        @Volatile var alertText = ""
         @Volatile var playing = false
         @Volatile var talking = false
         @Volatile var lastCmd = "-"
@@ -245,6 +248,7 @@ class TerminalService : Service() {
         o.put("name", store.termName)
         o.put("floor", store.termFloor)
         o.put("group", store.termGroup)
+        o.put("bldg", store.building)
         o.put("ip", Net.localIp())
         o.put("ver", Proto.APP_VER)
         o.put("batt", battery())
@@ -359,6 +363,7 @@ class TerminalService : Service() {
                 if (req.has("name")) store.termName = req.optString("name")
                 if (req.has("floor")) store.termFloor = req.optInt("floor", store.termFloor)
                 if (req.has("group")) store.termGroup = req.optString("group")
+                if (req.has("bldg")) store.building = req.optString("bldg")
                 startForegroundSafe(false)
                 store.log("system", "コンソールから端末情報を更新")
             }
@@ -394,6 +399,21 @@ class TerminalService : Service() {
                     }.start()
                 }
                 store.log("broadcast", "読み上げ: $text")
+            }
+
+            "alert" -> {
+                alertOn = req.optBoolean("on", false)
+                if (alertOn) {
+                    alertName = req.optString("name", "緊急")
+                    alertText = req.optString("text", "")
+                    setVolumePercent(100)
+                    store.log("emergency", "警報表示を開始: $alertName")
+                } else {
+                    alertName = ""
+                    alertText = ""
+                    store.log("emergency", "警報表示を解除")
+                }
+                push()
             }
 
             "bcast_start" -> {

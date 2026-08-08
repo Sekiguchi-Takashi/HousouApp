@@ -8,6 +8,7 @@ class Dev {
     var name: String = ""
     var floor: Int = 1
     var group: String = "既定"
+    var building: String = ""
     var ip: String = ""
     var battery: Int = -1
     var rssi: Int = 0
@@ -26,10 +27,14 @@ class Dev {
 
     fun label(): String = "${floor}F ${name}"
 
+    fun fullLabel(): String =
+        if (building.isEmpty()) label() else "$building ${floor}F ${name}"
+
     fun toJson(): JSONObject {
         val o = JSONObject()
         o.put("id", id); o.put("name", name); o.put("floor", floor)
-        o.put("group", group); o.put("ip", ip); o.put("volume", volume)
+        o.put("group", group); o.put("bldg", building)
+        o.put("ip", ip); o.put("volume", volume)
         o.put("ver", ver)
         return o
     }
@@ -41,6 +46,7 @@ class Dev {
             d.name = o.optString("name", "端末")
             d.floor = o.optInt("floor", 1)
             d.group = o.optString("group", "既定")
+            d.building = o.optString("bldg", "")
             d.ip = o.optString("ip", "")
             d.volume = o.optInt("volume", 50)
             d.ver = o.optString("ver", "")
@@ -107,6 +113,7 @@ object Registry {
         d.name = o.optString("name", d.name)
         d.floor = o.optInt("floor", d.floor)
         if (o.has("group")) d.group = o.optString("group", d.group)
+        if (o.has("bldg")) d.building = o.optString("bldg", d.building)
         d.ip = if (ip.isNotEmpty()) ip else o.optString("ip", d.ip)
         d.battery = o.optInt("batt", d.battery)
         d.rssi = o.optInt("rssi", d.rssi)
@@ -123,10 +130,26 @@ object Registry {
     @Synchronized
     fun groups(): List<String> {
         val set = LinkedHashSet<String>()
-        for (d in map.values) set.add(d.group)
+        for (d in scoped()) set.add(d.group)
         return set.toList()
     }
 
     @Synchronized
-    fun floors(): List<Int> = map.values.map { it.floor }.distinct().sorted()
+    fun floors(): List<Int> = scoped().map { it.floor }.distinct().sorted()
+
+    /** 検出済みの建物名（空欄は除く） */
+    @Synchronized
+    fun buildings(): List<String> {
+        val set = LinkedHashSet<String>()
+        for (d in map.values) if (d.building.isNotEmpty()) set.add(d.building)
+        return set.toList().sorted()
+    }
+
+    /** 現在の建物スコープに含まれる端末 */
+    @Synchronized
+    fun scoped(): List<Dev> {
+        val sc = Targeting.scope
+        if (sc.isEmpty()) return all()
+        return all().filter { it.building == sc }
+    }
 }
