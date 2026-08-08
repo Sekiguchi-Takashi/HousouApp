@@ -58,6 +58,22 @@ class Store(ctx: Context) {
         get() = p.getBoolean("agc", true)
         set(v) = p.edit().putBoolean("agc", v).apply()
 
+    // ---------- BGM / 音声ライブラリ ----------
+    var bgmId: String
+        get() = s("bgm_id", "")
+        set(v) = put("bgm_id", v)
+
+    var bgmVolume: Int
+        get() = p.getInt("bgm_vol", 35)
+        set(v) = p.edit().putInt("bgm_vol", v).apply()
+
+    var bgmLoop: Boolean
+        get() = p.getBoolean("bgm_loop", true)
+        set(v) = p.edit().putBoolean("bgm_loop", v).apply()
+
+    fun audioItems(): JSONArray = arr("audio")
+    fun saveAudioItems(a: JSONArray) = put("audio", a.toString())
+
     var autoStart: Boolean
         get() = p.getBoolean("autostart", true)
         set(v) = p.edit().putBoolean("autostart", v).apply()
@@ -107,12 +123,14 @@ class Store(ctx: Context) {
     // ---------- ログ ----------
     fun logs(): JSONArray = arr("logs")
 
-    fun log(kind: String, text: String) {
+    fun log(kind: String, text: String, target: String = "", tag: String = "") {
         val a = logs()
         val o = JSONObject()
         o.put("at", System.currentTimeMillis())
         o.put("kind", kind)
         o.put("text", text)
+        if (target.isNotEmpty()) o.put("target", target)
+        if (tag.isNotEmpty()) o.put("tag", tag)
         val out = JSONArray()
         out.put(o)
         var n = 0

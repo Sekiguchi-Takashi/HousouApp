@@ -86,6 +86,7 @@ class TerminalService : Service() {
         initTts()
         startAnnounce()
         startCtrlServer()
+        startWatchdog()
         store.log("system", "端末サービス起動 (${store.termFloor}F ${store.termName})")
     }
 
@@ -134,18 +135,26 @@ class TerminalService : Service() {
         }
     }
 
+    /** 再入可能。既に保持していれば何もしない */
+    @Synchronized
     private fun acquireLocks() {
         try {
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            val w = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "housou:term")
-            w.acquire()
-            wake = w
+            val cur = wake
+            if (cur == null || !cur.isHeld) {
+                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                val w = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "housou:term")
+                w.acquire()
+                wake = w
+            }
         } catch (e: Exception) { }
         try {
-            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val l = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "housou:wifi")
-            l.acquire()
-            wifiLock = l
+            val cur = wifiLock
+            if (cur == null || !cur.isHeld) {
+                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                val l = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "housou:wifi")
+                l.acquire()
+                wifiLock = l
+            }
         } catch (e: Exception) { }
     }
 
@@ -186,6 +195,44 @@ class TerminalService : Service() {
             try { sock.close() } catch (e: Exception) { }
         }
         announceTh = t
+        t.start()
+    }
+
+    // ------------------------------------------------------------- 自己復旧
+    /**
+     * 5秒ごとに自身を点検する。
+     *  - 制御サーバが落ちていれば再起動
+     *  - 放送受信中なのに音声が10秒来ていなければセッションを閉じる
+     *  - WakeLockが外れていれば取り直す
+     */
+    private fun startWatchdog() {
+        val t = Thread {
+            while (alive) {
+                try {
+                    val ss = server
+                    if (ss == null || ss.isClosed) {
+                        store.log("system", "制御サーバを自動復旧しました")
+                        startCtrlServer()
+                    }
+                    val rx = receiver
+                    if (rx != null && playing) {
+                        val last = rx.lastPacketAt
+                        if (last > 0L && System.currentTimeMillis() - last > 10000) {
+                            stopPlayback()
+                            store.log("system", "音声が途絶したため受信を終了しました")
+                        }
+                    }
+                    val w = wake
+                    if (w == null || !w.isHeld) acquireLocks()
+                } catch (e: Exception) { }
+                var n = 0
+                while (n < 50 && alive) {
+                    try { Thread.sleep(100) } catch (e: Exception) { }
+                    n++
+                }
+            }
+        }
+        watchTh = t
         t.start()
     }
 

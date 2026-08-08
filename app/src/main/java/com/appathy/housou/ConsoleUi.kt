@@ -37,8 +37,8 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
 
     private val refreshers = ArrayList<() -> Unit>()
 
-    private val tabNames = arrayOf("状況", "放送", "通話", "端末", "予約", "ログ", "設定")
-    private val tabIcons = arrayOf("📊", "📢", "🎙", "📱", "⏰", "📜", "⚙")
+    private val tabNames = arrayOf("状況", "放送", "通話", "端末", "音源", "予約", "ログ", "設定")
+    private val tabIcons = arrayOf("📊", "📢", "🎙", "📱", "🎵", "⏰", "📜", "⚙")
 
     // ------------------------------------------------------------ 基盤
     fun attach(container: FrameLayout) {
@@ -190,8 +190,9 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             1 -> tabBroadcast()
             2 -> tabCall()
             3 -> tabDevices()
-            4 -> tabSchedule()
-            5 -> tabLog()
+            4 -> tabLibrary()
+            5 -> tabSchedule()
+            6 -> tabLog()
             else -> tabSettings()
         }
         content.removeAllViews()
@@ -263,6 +264,13 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         stats.addView(s3, LinearLayout.LayoutParams(0, Ui.WC, 1f))
         l.addView(c1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
 
+        // AI放送支援
+        val cS = Ui.card(act)
+        cS.addView(Ui.tv(act, "💡 AIのおすすめ", 16f, Ui.FG, true))
+        val sug = Ui.col(act)
+        cS.addView(sug, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        l.addView(cS, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
         // 通知
         val c2 = Ui.card(act)
         c2.addView(Ui.tv(act, "🔔 通知 / AI推論", 16f, Ui.FG, true))
@@ -291,6 +299,25 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             (s3.getChildAt(1) as TextView).text =
                 if (on.isEmpty()) "-" else (on.sumOf { it.rtt } / on.size).toString() + "ms"
 
+            sug.removeAllViews()
+            val items = Suggest.build(store)
+            if (items.isEmpty()) {
+                sug.addView(
+                    Ui.tv(act, "放送の実績が貯まると、放送先や定時放送を提案します。", 12f, Ui.SUB)
+                )
+            } else {
+                for (sg in items) {
+                    val row = Ui.col(act)
+                    row.setPadding(0, Ui.dp(act, 6), 0, Ui.dp(act, 6))
+                    row.addView(Ui.tv(act, sg.title, 13f, Ui.ACC, true))
+                    row.addView(Ui.tv(act, sg.detail, 11f, Ui.SUB))
+                    row.addView(Ui.ghost(act, applyLabel(sg), Ui.FG) {
+                        applySuggestion(sg)
+                    }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+                    sug.addView(row)
+                }
+            }
+
             alerts.removeAllViews()
             val list = Diag.alerts(all)
             if (list.isEmpty()) {
@@ -307,6 +334,30 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             }
         }
         return Ui.scroll(act, l)
+    }
+
+    private fun applyLabel(sg: Suggest.Item): String = when (sg.kind) {
+        Suggest.K_TARGET -> "この対象にする"
+        Suggest.K_SCHEDULE -> "予約に登録する"
+        else -> "いま送信する"
+    }
+
+    private fun applySuggestion(sg: Suggest.Item) {
+        when (sg.kind) {
+            Suggest.K_TARGET -> {
+                targetSpec = sg.target
+                tab = 1
+                render()
+            }
+            Suggest.K_SCHEDULE -> {
+                addSchedule(sg.hour, sg.minute, "daily", sg.target, sg.text, Suggest.bodyOf(store, sg.text))
+                tab = 5
+                render()
+            }
+            else -> {
+                sendTts(targetSpec, Suggest.bodyOf(store, sg.text), false, sg.text)
+            }
+        }
     }
 
     private fun statCell(k: String, v: String): LinearLayout {
@@ -329,7 +380,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             Assistant.A_BROADCAST -> { tab = 1; render() }
             Assistant.A_CALL -> { tab = 2; render() }
             Assistant.A_DEVICES -> { tab = 3; render() }
-            Assistant.A_LOG -> { tab = 5; render() }
+            Assistant.A_LOG -> { tab = 6; render() }
             Assistant.A_CHIME -> sendChime(targetSpec, false)
             Assistant.A_EMERGENCY -> {
                 if (r.text.isNotEmpty()) sendTts(targetSpec, r.text, true)
@@ -341,7 +392,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             }
             Assistant.A_SCHEDULE -> {
                 addSchedule(r.hour, r.minute, if (r.weekday) "weekday" else "daily", targetSpec, r.text, r.text)
-                tab = 4
+                tab = 5
                 render()
             }
             Assistant.A_STATUS -> {
@@ -434,7 +485,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             while (i < tpl.length() && i < 6) {
                 val o = tpl.getJSONObject(i)
                 c3.addView(Ui.ghost(act, o.optString("title"), Ui.FG) {
-                    sendTts(targetSpec, o.optString("body"), false)
+                    sendTts(targetSpec, o.optString("body"), false, o.optString("title"))
                 }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
                 i++
             }
@@ -446,8 +497,10 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             label.text = Targeting.label(targetSpec)
             val n = Targeting.resolve(targetSpec).size
             count.text = "オンライン ${n} 台へ送信されます（音質: ${if (store.quality == "low") "低帯域" else "高音質"}）"
-            meter.text = if (ConsoleService.broadcasting) {
-                "🔴 放送中　入力レベル " + "▮".repeat((ConsoleService.micLevel / 12).coerceIn(0, 8))
+            meter.text = if (Mixer.micActive) {
+                "🔴 放送中　入力レベル " + "▮".repeat((Mixer.micLevel / 12).coerceIn(0, 8))
+            } else if (Mixer.bgmActive || Mixer.fileActive) {
+                "♪ " + (if (Mixer.fileActive) Mixer.fileTitle else Mixer.bgmTitle) + " を配信中"
             } else {
                 "入力レベル —"
             }
@@ -505,36 +558,30 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
     }
 
     private fun startPtt() {
+        if (ConsoleService.calling) {
+            act.toast("通話中はマイク放送を開始できません")
+            return
+        }
         val targets = Targeting.resolve(targetSpec)
         if (targets.isEmpty()) {
             act.toast("対象端末がオンラインではありません")
             return
         }
         val rate = store.rate
-        ConsoleService.broadcasting = true
         bg {
-            val req = Net.cmd("bcast_start")
-            req.put("rate", rate)
-            for (d in targets) Net.ctrl(d.ip, req, 2000)
-            val ok = ConsoleService.startTx(targets.map { it.ip }, rate, store.autoGain)
-            if (!ok) {
-                ConsoleService.broadcasting = false
-                ui { act.toast("マイクを開始できません（権限を確認）") }
-            }
+            val ok = Mixer.startMic(targets.map { it.ip }, rate, store.autoGain)
+            if (!ok) ui { act.toast("マイクを開始できません（権限を確認）") }
         }
-        store.log("broadcast", "放送開始 → ${Targeting.label(targetSpec)} (${targets.size}台)")
+        store.log(
+            "broadcast", "放送開始 → ${Targeting.label(targetSpec)} (${targets.size}台)",
+            targetSpec, "マイク放送"
+        )
     }
 
     private fun stopPtt() {
-        if (!ConsoleService.broadcasting) return
-        ConsoleService.broadcasting = false
-        val targets = Targeting.resolve(targetSpec)
-        bg {
-            ConsoleService.stopTx()
-            val req = Net.cmd("bcast_stop")
-            for (d in targets) Net.ctrl(d.ip, req, 2000)
-        }
-        store.log("broadcast", "放送終了 → ${Targeting.label(targetSpec)}")
+        if (!Mixer.micActive) return
+        bg { Mixer.stopMic() }
+        store.log("broadcast", "放送終了 → ${Targeting.label(targetSpec)}", targetSpec)
     }
 
     private fun sendChime(spec: String, urgent: Boolean) {
@@ -549,15 +596,16 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             for (d in targets) Net.ctrl(d.ip, req, 3000)
             ui { act.toast("チャイムを送信しました (${targets.size}台)") }
         }
-        store.log("broadcast", "チャイム → ${Targeting.label(spec)}")
+        store.log("broadcast", "チャイム → ${Targeting.label(spec)}", spec, "チャイム")
     }
 
-    private fun sendTts(spec: String, text: String, urgent: Boolean) {
+    private fun sendTts(spec: String, text: String, urgent: Boolean, tag: String = "") {
         val targets = Targeting.resolve(spec)
         if (targets.isEmpty()) {
             act.toast("対象端末がオンラインではありません")
             return
         }
+        Mixer.duckFor(ConsoleService.estimateSpeechMs(text))
         bg {
             val req = Net.cmd("tts")
             req.put("text", text)
@@ -566,7 +614,10 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             for (d in targets) Net.ctrl(d.ip, req, 3500)
             ui { act.toast("読み上げを送信しました (${targets.size}台)") }
         }
-        store.log(if (urgent) "emergency" else "broadcast", "読み上げ「$text」→ ${Targeting.label(spec)}")
+        store.log(
+            if (urgent) "emergency" else "broadcast",
+            "読み上げ「$text」→ ${Targeting.label(spec)}", spec, tag
+        )
     }
 
     private fun emergencyDialog() {
@@ -721,7 +772,8 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         val l = Ui.col(act, 14)
         val head = Ui.row(act)
         head.addView(Ui.tv(act, "📱 端末一覧", 17f, Ui.FG, true), LinearLayout.LayoutParams(0, Ui.WC, 1f))
-        head.addView(Ui.ghost(act, "手動追加", Ui.SUB) { manualAdd() })
+        head.addView(Ui.ghost(act, "QRで追加", Ui.ACC) { qrAdd() })
+        head.addView(Ui.ghost(act, "手動", Ui.SUB) { manualAdd() })
         l.addView(head)
 
         val list = Ui.col(act)
@@ -878,6 +930,36 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             .show()
     }
 
+    /** 端末画面のQRを読み取って台帳へ登録 */
+    private fun qrAdd() {
+        act.scanQr { text ->
+            val o = Qr.parse(text)
+            if (o == null) {
+                act.toast("放送室アプリのQRではありません")
+                return@scanQr
+            }
+            val ip = o.optString("ip")
+            if (ip.isEmpty()) {
+                act.toast("IPを取得できませんでした")
+                return@scanQr
+            }
+            bg {
+                val res = Net.ctrl(ip, Net.cmd("status"), 3000)
+                ui {
+                    val d = if (res != null) Registry.upsert(res, ip) else Registry.upsert(o, ip)
+                    Registry.save(store)
+                    if (res == null) {
+                        act.toast("登録しましたが応答がありません: ${d.label()}")
+                    } else {
+                        act.toast("登録しました: ${d.label()}")
+                    }
+                    store.log("system", "QRから端末を登録: ${d.label()} ($ip)")
+                    render()
+                }
+            }
+        }
+    }
+
     private fun manualAdd() {
         val box = Ui.col(act, 16)
         val ip = Ui.edit(act, "端末のIPアドレス（例 192.168.1.42）")
@@ -905,6 +987,188 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                 }
             }
             .show()
+    }
+
+
+    // ============================================================ 4 音源ライブラリ / BGM
+    private fun tabLibrary(): View {
+        val l = Ui.col(act, 14)
+
+        // 再生状況
+        val c0 = Ui.card(act, Ui.CARD2)
+        c0.addView(Ui.tv(act, "🎵 配信中", 16f, Ui.ACC, true))
+        val now = Ui.tv(act, "", 14f, Ui.FG, true)
+        c0.addView(now, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        val prog = Ui.tv(act, "", 11f, Ui.SUB)
+        c0.addView(prog, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        val stopRow = Ui.row(act)
+        stopRow.addView(Ui.ghost(act, "⏹ 音声ファイル停止", Ui.RED) {
+            bg { Mixer.stopFile() }
+        }, cw())
+        stopRow.addView(Ui.ghost(act, "⏹ BGM停止", Ui.RED) {
+            bg { Mixer.stopBgm() }
+            store.log("broadcast", "BGMを停止")
+        }, cw())
+        c0.addView(stopRow, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        l.addView(c0)
+
+        // BGM設定
+        val c1 = Ui.card(act)
+        c1.addView(Ui.tv(act, "🔁 BGM設定", 16f, Ui.FG, true))
+        val vlabel = Ui.tv(act, "BGM音量 ${store.bgmVolume}%", 12f, Ui.SUB)
+        c1.addView(vlabel, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        val sb = SeekBar(act)
+        sb.max = 100
+        sb.progress = store.bgmVolume
+        sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(v: SeekBar?, p: Int, u: Boolean) {
+                vlabel.text = "BGM音量 ${p}%"
+                Mixer.bgmGain = p / 100f
+            }
+            override fun onStartTrackingTouch(v: SeekBar?) { }
+            override fun onStopTrackingTouch(v: SeekBar?) {
+                store.bgmVolume = v?.progress ?: 35
+            }
+        })
+        c1.addView(sb, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        val loop = Ui.ghost(act, "", Ui.FG) { }
+        loop.text = if (store.bgmLoop) "繰り返し: ON" else "繰り返し: OFF"
+        loop.setOnClickListener {
+            store.bgmLoop = !store.bgmLoop
+            Mixer.bgmLoop = store.bgmLoop
+            loop.text = if (store.bgmLoop) "繰り返し: ON" else "繰り返し: OFF"
+        }
+        c1.addView(loop, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        c1.addView(
+            Ui.tv(act, "マイク放送・音声ファイル放送・読み上げの間は、BGMが自動で絞られます。", 11f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8))
+        )
+        l.addView(c1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        // ライブラリ
+        val c2 = Ui.card(act)
+        val head = Ui.row(act)
+        head.addView(Ui.tv(act, "📚 音源ライブラリ", 16f, Ui.FG, true), LinearLayout.LayoutParams(0, Ui.WC, 1f))
+        head.addView(Ui.ghost(act, "＋ 取り込み", Ui.CYAN) { importAudio() })
+        c2.addView(head)
+        c2.addView(
+            Ui.tv(act, "取り込み時に16kHzモノラルへ変換して保存します。mp3 / m4a / wav / ogg に対応。", 11f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
+        val list = Ui.col(act)
+        c2.addView(list, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        l.addView(c2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        l.addView(Ui.space(act, 20))
+
+        refreshers.add {
+            now.text = when {
+                Mixer.fileActive -> "▶ " + Mixer.fileTitle
+                Mixer.bgmActive -> "🔁 " + Mixer.bgmTitle
+                else -> "停止中"
+            }
+            prog.text = when {
+                Mixer.fileActive -> "進捗 ${Mixer.fileProgress()}%　対象: ${Targeting.label(targetSpec)}"
+                Mixer.bgmActive -> "BGM再生中"
+                else -> "音源を選んで放送またはBGMに設定してください。"
+            }
+
+            list.removeAllViews()
+            val a = store.audioItems()
+            if (a.length() == 0) {
+                list.addView(Ui.tv(act, "音源がありません。「取り込み」から追加してください。", 12f, Ui.SUB))
+            }
+            var i = 0
+            while (i < a.length()) {
+                val o = a.getJSONObject(i)
+                val id = o.optString("id")
+                val row = Ui.col(act)
+                row.setPadding(0, Ui.dp(act, 8), 0, Ui.dp(act, 8))
+                val isBgm = store.bgmId == id
+                row.addView(
+                    Ui.tv(act, o.optString("title"), 14f, if (isBgm) Ui.ACC else Ui.FG, true)
+                )
+                row.addView(
+                    Ui.tv(
+                        act,
+                        Library.duration(o) + (if (isBgm) "　🔁 BGMに設定中" else ""),
+                        11f, Ui.SUB
+                    )
+                )
+                val ops = Ui.row(act)
+                ops.addView(Ui.ghost(act, "放送", Ui.ACC) { playFile(id, o.optString("title")) }, cw())
+                ops.addView(Ui.ghost(act, "BGM", Ui.CYAN) { playBgm(id, o.optString("title")) }, cw())
+                ops.addView(Ui.ghost(act, "削除", Ui.RED) {
+                    Library.remove(act, store, id)
+                    render()
+                }, cw())
+                row.addView(ops, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+                row.addView(Ui.sep(act))
+                list.addView(row)
+                i++
+            }
+        }
+        return Ui.scroll(act, l)
+    }
+
+    private fun importAudio() {
+        act.pickAudio { uri ->
+            act.toast("取り込み中…")
+            bg {
+                val o = Library.add(act, store, uri)
+                ui {
+                    if (o == null) {
+                        act.toast("この形式は読み込めませんでした")
+                    } else {
+                        act.toast("追加しました: ${o.optString("title")}")
+                        store.log("system", "音源を取り込み: ${o.optString("title")}")
+                        render()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun playFile(id: String, title: String) {
+        val targets = Targeting.resolve(targetSpec)
+        if (targets.isEmpty()) {
+            act.toast("対象端末がオンラインではありません")
+            return
+        }
+        bg {
+            val pcm = Library.pcm(act, id)
+            if (pcm == null) {
+                ui { act.toast("音源を読み込めません") }
+                return@bg
+            }
+            val ok = Mixer.startFile(pcm, title, targets.map { it.ip }, store.rate)
+            ui { if (!ok) act.toast("再生を開始できません") }
+        }
+        store.log(
+            "broadcast", "音声ファイル放送「$title」→ ${Targeting.label(targetSpec)}",
+            targetSpec, title
+        )
+    }
+
+    private fun playBgm(id: String, title: String) {
+        val targets = Targeting.resolve(targetSpec)
+        if (targets.isEmpty()) {
+            act.toast("対象端末がオンラインではありません")
+            return
+        }
+        store.bgmId = id
+        Mixer.bgmGain = store.bgmVolume / 100f
+        bg {
+            val pcm = Library.pcm(act, id)
+            if (pcm == null) {
+                ui { act.toast("音源を読み込めません") }
+                return@bg
+            }
+            val ok = Mixer.startBgm(pcm, title, targets.map { it.ip }, store.rate, store.bgmLoop)
+            ui {
+                if (ok) render() else act.toast("BGMを開始できません")
+            }
+        }
+        store.log("broadcast", "BGM開始「$title」→ ${Targeting.label(targetSpec)}", targetSpec, title)
     }
 
     // ============================================================ 4 予約 / 定型文
@@ -1001,7 +1265,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                 row.addView(Ui.tv(act, o.optString("body"), 11f, Ui.SUB))
                 val ops = Ui.row(act)
                 ops.addView(Ui.ghost(act, "送信", Ui.CYAN) {
-                    sendTts(targetSpec, o.optString("body"), false)
+                    sendTts(targetSpec, o.optString("body"), false, o.optString("title"))
                 }, cw())
                 ops.addView(Ui.ghost(act, "削除", Ui.RED) {
                     val out = JSONArray()

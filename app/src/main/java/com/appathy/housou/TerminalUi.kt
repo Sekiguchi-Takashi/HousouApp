@@ -3,6 +3,7 @@ package com.appathy.housou
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.widget.ImageView
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -132,6 +133,9 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         r.addView(b2, p2)
         l.addView(r, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 18)))
 
+        l.addView(Ui.ghost(act, "📷 登録用QRコードを表示", Ui.ACC) { showQr() },
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+
         if (!TerminalService.running) {
             l.addView(Ui.btn(act, "サービスを開始", Ui.GREEN) {
                 startService()
@@ -145,6 +149,37 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
 
         root.removeAllViews()
         root.addView(Ui.scroll(act, l))
+    }
+
+    /** コンソールのカメラで読み取らせる端末登録QR */
+    private fun showQr() {
+        val box = Ui.col(act, 16)
+        val px = Ui.dp(act, 240)
+        val bmp = Qr.encode(Qr.payload(store), px)
+        if (bmp == null) {
+            act.toast("QRを生成できませんでした")
+            return
+        }
+        val iv = ImageView(act)
+        iv.setImageBitmap(bmp)
+        iv.setBackgroundColor(0xFFFFFFFF.toInt())
+        iv.setPadding(Ui.dp(act, 8), Ui.dp(act, 8), Ui.dp(act, 8), Ui.dp(act, 8))
+        val lp = LinearLayout.LayoutParams(px, px)
+        lp.gravity = Gravity.CENTER_HORIZONTAL
+        box.addView(iv, lp)
+        box.addView(
+            Ui.tv(act, "管理コンソールの「端末」タブ →「QRで追加」で読み取ってください。", 12f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14))
+        )
+        box.addView(
+            Ui.tv(act, "${store.termFloor}F ${store.termName} / ${Net.localIp()}", 12f, Ui.FG),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
+        AlertDialog.Builder(act)
+            .setTitle("端末登録QR")
+            .setView(Ui.scroll(act, box))
+            .setPositiveButton("閉じる", null)
+            .show()
     }
 
     private fun ok(b: Boolean) = if (b) "有効" else "無効"

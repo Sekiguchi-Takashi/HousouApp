@@ -78,6 +78,9 @@ class ConsoleService : Service() {
             if (r.start()) callRx = r
         }
 
+        /** チャイム＋読み上げのおおよその所要時間 */
+        fun estimateSpeechMs(text: String): Long = 3500L + text.length * 180L
+
         @Synchronized
         fun stopCallRx() {
             callRx?.stop()
@@ -227,6 +230,7 @@ class ConsoleService : Service() {
                         d.rtt = -1
                     }
                 }
+                try { Alerts.evaluate(this, store, Registry.all()) } catch (e: Exception) { }
                 push()
                 var i = 0
                 while (i < 40 && alive) {
@@ -288,6 +292,7 @@ class ConsoleService : Service() {
         val text = o.optString("text", "")
         val urgent = o.optBoolean("urgent", false)
         val targets = Targeting.resolve(target)
+        Mixer.duckFor(estimateSpeechMs(text))
         val req = Net.cmd("tts")
         req.put("text", text)
         req.put("urgent", urgent)
@@ -295,14 +300,19 @@ class ConsoleService : Service() {
         for (d in targets) {
             Net.ctrl(d.ip, req, 3000)
         }
-        store.log("schedule", "予約放送を実行: ${o.optString("title", text)} → ${targets.size}台")
+        store.log(
+            "schedule", "予約放送を実行: ${o.optString("title", text)} → ${targets.size}台",
+            target, o.optString("title")
+        )
         push()
     }
+
 
     override fun onDestroy() {
         alive = false
         running = false
         instance = null
+        try { Mixer.stopAll() } catch (e: Exception) { }
         stopTx()
         stopCallRx()
         try { mcLock?.release() } catch (e: Exception) { }

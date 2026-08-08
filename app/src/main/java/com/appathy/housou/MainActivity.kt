@@ -219,6 +219,46 @@ class MainActivity : AppCompatActivity() {
         showModeSelect()
     }
 
+    // ------------------------------------------------------- 外部Activity連携
+    var onScan: ((String) -> Unit)? = null
+    var onPickAudio: ((android.net.Uri) -> Unit)? = null
+
+    fun scanQr(cb: (String) -> Unit) {
+        onScan = cb
+        try {
+            startActivityForResult(Intent(this, ScanActivity::class.java), 91)
+        } catch (e: Exception) {
+            toast("カメラを開けません")
+        }
+    }
+
+    fun pickAudio(cb: (android.net.Uri) -> Unit) {
+        onPickAudio = cb
+        try {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            i.addCategory(Intent.CATEGORY_OPENABLE)
+            i.type = "audio/*"
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivityForResult(i, 92)
+        } catch (e: Exception) {
+            toast("ファイル選択を開けません")
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK || data == null) return
+        if (requestCode == 91) {
+            val t = data.getStringExtra("text")
+            if (!t.isNullOrEmpty()) onScan?.invoke(t)
+        } else if (requestCode == 92) {
+            val u = data.data
+            if (u != null) onPickAudio?.invoke(u)
+        }
+    }
+
     fun toast(s: String) {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
     }
