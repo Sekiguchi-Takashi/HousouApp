@@ -140,6 +140,9 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         l.addView(Ui.ghost(act, "📷 登録用QRコードを表示", Ui.ACC) { showQr() },
             Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
 
+        val rb = Ui.ghost(act, "🔈 出力先: " + Routing.status(act, store.route), Ui.FG) { pickRoute() }
+        l.addView(rb, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+
         if (!TerminalService.running) {
             l.addView(Ui.btn(act, "サービスを開始", Ui.GREEN) {
                 startService()
@@ -153,6 +156,20 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
 
         root.removeAllViews()
         root.addView(Ui.scroll(act, l))
+    }
+
+    /** 音声出力先の切り替え（接続済みのものだけ出す） */
+    private fun pickRoute() {
+        val avail = Routing.available(act)
+        val items = avail.map { Routing.label(it) }.toTypedArray()
+        AlertDialog.Builder(act).setTitle("音声出力先")
+            .setItems(items) { _, i ->
+                store.route = avail[i]
+                act.toast("出力先を " + Routing.label(avail[i]) + " にしました")
+                render()
+            }
+            .setNegativeButton("閉じる", null)
+            .show()
     }
 
     /** 災害放送を受信している間の全画面警報表示 */
@@ -262,6 +279,26 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         box.addView(Ui.tv(act, "グループ", 12f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
         box.addView(grp, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
 
+        val bldg = Ui.edit(act, "建物名", store.building)
+        box.addView(Ui.tv(act, "建物", 12f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        box.addView(bldg, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
+        val host = Ui.edit(act, "例: 192.168.1.10 / console.example.net", store.consoleHost)
+        box.addView(
+            Ui.tv(act, "コンソールのアドレス（遠隔運用）", 12f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14))
+        )
+        box.addView(host, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(
+            Ui.tv(
+                act,
+                "同一Wi-Fi内なら空欄でよい（自動検出されます）。別サブネットやVPN越しの場合だけ、" +
+                        "コンソールのアドレスを入れると10秒ごとに自分から登録しにいきます。" +
+                        "現在: " + (if (TerminalService.remoteOk) "登録できています" else "未使用 / 未到達"),
+                10f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+        )
+
         box.addView(Ui.ghost(act, "この端末を管理コンソールに切替", Ui.ACC) {
             act.switchMode()
         }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 16)))
@@ -274,6 +311,8 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
                 store.termName = name.text.toString().ifBlank { store.termName }
                 store.termFloor = floor.text.toString().toIntOrNull() ?: store.termFloor
                 store.termGroup = grp.text.toString().ifBlank { store.termGroup }
+                store.building = bldg.text.toString().ifBlank { store.building }
+                store.consoleHost = host.text.toString().trim()
                 store.log("system", "端末設定を更新")
                 render()
             }

@@ -19,6 +19,9 @@ class Dev {
     var micOn: Boolean = true
     var spkOn: Boolean = true
     var ver: String = ""
+    var route: String = "auto"
+    var routeName: String = ""
+    var remote: Boolean = false
     var lastSeen: Long = 0L
     var loss: Int = 0
 
@@ -123,6 +126,8 @@ object Registry {
         d.micOn = o.optBoolean("mic", true)
         d.spkOn = o.optBoolean("spk", true)
         d.ver = o.optString("ver", d.ver)
+        d.route = o.optString("route", d.route)
+        d.routeName = o.optString("route_name", d.routeName)
         d.lastSeen = System.currentTimeMillis()
         return d
     }

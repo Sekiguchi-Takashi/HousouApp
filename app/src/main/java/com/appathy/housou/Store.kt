@@ -62,6 +62,16 @@ class Store(ctx: Context) {
         get() = p.getBoolean("agc", true)
         set(v) = p.edit().putBoolean("agc", v).apply()
 
+    /** 端末の音声出力先（auto/speaker/wired/bt/usb） */
+    var route: String
+        get() = s("route", "auto")
+        set(v) = put("route", v)
+
+    /** 遠隔運用時に登録を送るコンソールのアドレス（空ならブロードキャストのみ） */
+    var consoleHost: String
+        get() = s("console_host", "")
+        set(v) = put("console_host", v)
+
     // ---------- BGM / 音声ライブラリ ----------
     var bgmId: String
         get() = s("bgm_id", "")

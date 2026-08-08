@@ -49,6 +49,7 @@ class TerminalService : Service() {
         @Volatile var alertOn = false
         @Volatile var alertName = ""
         @Volatile var alertText = ""
+        @Volatile var remoteOk = false
         @Volatile var playing = false
         @Volatile var talking = false
         @Volatile var lastCmd = "-"
@@ -91,6 +92,7 @@ class TerminalService : Service() {
         startAnnounce()
         startCtrlServer()
         startWatchdog()
+        startRemoteRegister()
         store.log("system", "端末サービス起動 (${store.termFloor}F ${store.termName})")
     }
 
@@ -202,6 +204,49 @@ class TerminalService : Service() {
         t.start()
     }
 
+    /**
+     * 遠隔運用（VPN / 別サブネット）向けの登録送信。
+     * UDPブロードキャストはルータを越えないため、コンソールのアドレスが
+     * 設定されている場合はTCPで直接ステータスを送りつけて台帳に載せてもらう。
+     */
+    private fun startRemoteRegister() {
+        Thread {
+            while (alive) {
+                val host = store.consoleHost.trim()
+                if (host.isNotEmpty()) {
+                    try {
+                        val i = host.lastIndexOf(':')
+                        val h = if (i > 0) host.substring(0, i) else host
+                        val port = if (i > 0) {
+                            host.substring(i + 1).toIntOrNull() ?: Proto.PORT_REG
+                        } else {
+                            Proto.PORT_REG
+                        }
+                        val sock = java.net.Socket()
+                        sock.connect(java.net.InetSocketAddress(h, port), 4000)
+                        sock.soTimeout = 4000
+                        val w = sock.getOutputStream().bufferedWriter()
+                        w.write(statusJson().toString())
+                        w.write("\n")
+                        w.flush()
+                        try { sock.getInputStream().bufferedReader().readLine() } catch (e: Exception) { }
+                        sock.close()
+                        remoteOk = true
+                    } catch (e: Exception) {
+                        remoteOk = false
+                    }
+                } else {
+                    remoteOk = false
+                }
+                var n = 0
+                while (n < 100 && alive) {
+                    try { Thread.sleep(100) } catch (e: Exception) { }
+                    n++
+                }
+            }
+        }.start()
+    }
+
     // ------------------------------------------------------------- 自己復旧
     /**
      * 5秒ごとに自身を点検する。
@@ -258,6 +303,8 @@ class TerminalService : Service() {
         o.put("talking", talking)
         o.put("mic", micOn)
         o.put("spk", spkOn)
+        o.put("route", store.route)
+        o.put("route_name", Routing.status(this, store.route))
         return o
     }
 
@@ -381,7 +428,12 @@ class TerminalService : Service() {
                 val urgent = req.optBoolean("urgent", false)
                 if (spkOn) {
                     if (urgent) setVolumePercent(100)
-                    Thread { Audio.playBlob(Proto.RATE_HIGH, Audio.chime(Proto.RATE_HIGH, urgent)) }.start()
+                    Thread {
+                        Audio.playBlob(
+                            Proto.RATE_HIGH, Audio.chime(Proto.RATE_HIGH, urgent),
+                            this@TerminalService, store.route
+                        )
+                    }.start()
                 }
                 store.log("broadcast", if (urgent) "緊急チャイム受信" else "チャイム受信")
             }
@@ -393,12 +445,28 @@ class TerminalService : Service() {
                     if (urgent) setVolumePercent(100)
                     Thread {
                         if (req.optBoolean("chime", true)) {
-                            Audio.playBlob(Proto.RATE_HIGH, Audio.chime(Proto.RATE_HIGH, urgent))
+                            Audio.playBlob(
+                                Proto.RATE_HIGH, Audio.chime(Proto.RATE_HIGH, urgent),
+                                this@TerminalService, store.route
+                            )
                         }
                         speak(text, urgent)
                     }.start()
                 }
                 store.log("broadcast", "読み上げ: $text")
+            }
+
+            "route" -> {
+                val m = req.optString("mode", Routing.AUTO)
+                if (Routing.modes.contains(m)) {
+                    store.route = m
+                    store.log("system", "音声出力先を変更: " + Routing.label(m))
+                    if (playing) {
+                        stopPlayback()
+                        startPlayback(Proto.RATE_HIGH)
+                    }
+                    push()
+                }
             }
 
             "alert" -> {
@@ -482,6 +550,8 @@ class TerminalService : Service() {
     private fun startPlayback(rate: Int) {
         if (receiver != null) return
         val r = Audio.Receiver(rate, Proto.PORT_AUDIO_DOWN)
+        r.routeCtx = this
+        r.routeMode = store.route
         if (r.start()) {
             receiver = r
             playing = true

@@ -16,10 +16,13 @@ object Proto {
     /** コンソールの外部トリガー受付（HTTP GET） */
     const val PORT_TRIGGER = 45304
 
+    /** コンソールの遠隔端末登録受付（TCP・別サブネット/VPN用） */
+    const val PORT_REG = 45305
+
     const val RATE_HIGH = 16000
     const val RATE_LOW = 8000
 
-    const val APP_VER = "1.2"
+    const val APP_VER = "1.3"
 
     /** この時間、アナウンス/応答が無ければオフライン扱い */
     const val OFFLINE_MS = 14000L

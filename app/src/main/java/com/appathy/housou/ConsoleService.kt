@@ -101,6 +101,7 @@ class ConsoleService : Service() {
     private var schedTh: Thread? = null
     private var disasterTh: Thread? = null
     private var trigger: java.net.ServerSocket? = null
+    private var regServer: java.net.ServerSocket? = null
     private var mcLock: WifiManager.MulticastLock? = null
     private var wake: PowerManager.WakeLock? = null
 
@@ -119,6 +120,7 @@ class ConsoleService : Service() {
         startPolling()
         startScheduler()
         startTrigger()
+        startRegServer()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -159,6 +161,44 @@ class ConsoleService : Service() {
         } catch (e: Exception) {
             try { startForeground(NOTI_ID, n) } catch (e2: Exception) { }
         }
+    }
+
+    /**
+     * 遠隔端末の登録受付。
+     * ブロードキャストが届かない別サブネット / VPN 越しの端末は、
+     * 自分からここへステータスを送ってきて台帳に載る。
+     * 以降の制御は通常どおり端末IPへのTCPで行う（経路がある前提）。
+     */
+    private fun startRegServer() {
+        Thread {
+            try {
+                val ss = java.net.ServerSocket(Proto.PORT_REG)
+                regServer = ss
+                while (alive) {
+                    val sock = ss.accept()
+                    Thread {
+                        try {
+                            sock.soTimeout = 4000
+                            val line = sock.getInputStream().bufferedReader().readLine() ?: ""
+                            val o = JSONObject(line)
+                            val ip = sock.inetAddress.hostAddress ?: ""
+                            if (o.optString("id").isNotEmpty()) {
+                                val d = Registry.upsert(o, ip)
+                                d.remote = true
+                                Registry.save(store)
+                                push()
+                            }
+                            val w = sock.getOutputStream().bufferedWriter()
+                            w.write("{\"ok\":true}")
+                            w.flush()
+                        } catch (e: Exception) {
+                        } finally {
+                            try { sock.close() } catch (e: Exception) { }
+                        }
+                    }.start()
+                }
+            } catch (e: Exception) { }
+        }.start()
     }
 
     // ============================================================ 災害放送
@@ -466,6 +506,7 @@ class ConsoleService : Service() {
         try { Mixer.stopAll() } catch (e: Exception) { }
         stopDisaster()
         try { trigger?.close() } catch (e: Exception) { }
+        try { regServer?.close() } catch (e: Exception) { }
         stopTx()
         stopCallRx()
         try { mcLock?.release() } catch (e: Exception) { }

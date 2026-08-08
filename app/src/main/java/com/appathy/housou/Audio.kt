@@ -21,6 +21,10 @@ object Audio {
     class Player(private val rate: Int) {
         private var track: AudioTrack? = null
 
+        /** 出力先を固定したい場合に設定する（null なら自動） */
+        var routeCtx: android.content.Context? = null
+        var routeMode: String = Routing.AUTO
+
         fun start() {
             if (track != null) return
             val min = AudioTrack.getMinBufferSize(
@@ -44,6 +48,8 @@ object Audio {
                 .setBufferSizeInBytes(buf)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
+            val c = routeCtx
+            if (c != null) Routing.apply(c, t, routeMode)
             t.play()
             track = t
         }
@@ -244,8 +250,10 @@ object Audio {
         return buf
     }
 
-    fun playBlob(rate: Int, data: ByteArray) {
+    fun playBlob(rate: Int, data: ByteArray, ctx: android.content.Context? = null, mode: String = Routing.AUTO) {
         val p = Player(rate)
+        p.routeCtx = ctx
+        p.routeMode = mode
         p.start()
         var off = 0
         val chunk = 2048
@@ -320,6 +328,10 @@ object Audio {
         private var sock: DatagramSocket? = null
         private var th: Thread? = null
         private var player: Player? = null
+
+        /** 出力先の固定（端末側の設定を反映する） */
+        var routeCtx: android.content.Context? = null
+        var routeMode: String = Routing.AUTO
         @Volatile private var running = false
         @Volatile var lastPacketAt = 0L
             private set
@@ -336,6 +348,8 @@ object Audio {
                 return false
             }
             val p = Player(rate)
+            p.routeCtx = routeCtx
+            p.routeMode = routeMode
             p.start()
             player = p
             running = true

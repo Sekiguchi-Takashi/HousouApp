@@ -1,7 +1,7 @@
 # HANDOFF — HousouApp（放送室）
 
 ## 現況
-v1.2 / versionCode 4。Kotlin、UIは全てコード生成（XMLレイアウトなし）。
+v1.3 / versionCode 5。Kotlin、UIは全てコード生成（XMLレイアウトなし）。
 1APK 2ロール（console / terminal）。`Store.mode` で分岐し `MainActivity.route()` が画面を決める。
 
 ## ファイル構成
@@ -21,6 +21,7 @@ v1.2 / versionCode 4。Kotlin、UIは全てコード生成（XMLレイアウト�
 | `Alerts.kt` | 端末異常の管理者通知（状態変化時のみ） |
 | `Trend.kt` | 観測値の時系列蓄積と故障予兆検知（最小二乗法の傾き） |
 | `Disaster.kt` | 災害シナリオ定義（6種） |
+| `Routing.kt` | 音声出力先の列挙・選択（内蔵/有線/BT/USB） |
 | `Diag.kt` | AI推論ルール（スコア、アラート、障害推定、帯域推奨） |
 | `Assistant.kt` | 日本語自然言語→操作意図のローカル写像 |
 | `TerminalService.kt` | 子機常駐（アナウンス・制御サーバ・受話・TTS） |
@@ -52,12 +53,18 @@ v1.2 / versionCode 4。Kotlin、UIは全てコード生成（XMLレイアウト�
 - **予兆判定は `Trend.omens()`**。現在値の評価は `Diag`、時間変化は `Trend` と役割を分ける。サンプリングは `ConsoleService` のポーリングから5分間隔で呼ぶ。
 - **外部トリガーは必ずPIN照合**。`handleTrigger()` の先頭で弾き、失敗もログに残す。
 
+## v1.3 で追加した約束
+
+- **出力先は `Audio.Player.routeCtx` / `routeMode` に渡す**。新しい再生経路を足したら、そこにも同じ2つを渡すこと。渡し忘れると自動選択に戻る（無音にはならない）。
+- **遠隔端末の登録は端末発**。`TerminalService.startRemoteRegister()` が10秒ごとにTCPで送り、`ConsoleService.startRegServer()` が受けて `Registry.upsert()` する。台帳に載った後の制御は通常経路と同じで、特別扱いしない。
+- **CSVはUTF-8 BOM付き**。Excelでの文字化けを避けるため。列を増やすときは `exportCsv()` のヘッダ行も直す。
+
 ## 次にやるなら
 
-1. **SIP/IP電話連携** — 通話系統を SIP スタックに差し替え。`Audio.Sender/Receiver` の口は流用できる
-2. **Bluetoothスピーカー** — 端末側 `Audio.Player` の AudioAttributes を切替
-3. **VPN遠隔放送** — 現状も手動IP登録で動くが、NAT越えとキープアライブの設計が要る
-4. **予兆の学習** — 現在は固定閾値。端末ごとの平常値を学習してから逸脱を見る方が誤検知が減る
+1. **予兆の学習** — 現在は固定閾値。端末ごとの平常値を学習してから逸脱を見る方が誤検知が減る
+2. **日報の自動生成** — CSVの土台はできたので、日次で集計してメール送信まで繋げられる
+3. **端末のグループ一括操作** — 音量・出力先をグループ単位でまとめて変更
+4. **SIP/IP電話連携** — 実装量が大きいわりに得るものが少ない。外線が本当に要るまで着手しない方がよい
 
 ## 既知の注意点
 
@@ -69,3 +76,5 @@ v1.2 / versionCode 4。Kotlin、UIは全てコード生成（XMLレイアウト�
 - 長尺音源は取り込み時に全デコードするため、15分でクリップされる（`Decoder.MAX_SECONDS`）
 - 予兆判定は最低6サンプル（30分）必要。それ未満は蓄積中と表示する
 - 外部トリガーはHTTP平文。LAN内前提で、インターネットに露出させない
+- 遠隔登録も平文。VPNの内側で使う前提。生インターネットには出さない
+- 出力先の固定はAudioTrack単位。TTSには効かない

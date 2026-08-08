@@ -950,6 +950,8 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         info.append("　グループ ").append(d.group)
         if (d.battery >= 0) info.append("　🔋").append(d.battery).append("%")
         if (d.rssi != 0) info.append("　📶").append(d.rssi).append("dBm")
+        if (d.remote) info.append("　🌐遠隔")
+        if (d.route != Routing.AUTO) info.append("　🔈").append(Routing.label(d.route))
         info.append("　🔊").append(d.volume).append("%")
         info.append("　RTT ").append(if (d.rtt >= 0) "${d.rtt}ms" else "-")
         c.addView(Ui.tv(act, info.toString(), 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
@@ -1024,6 +1026,35 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                 d.volume = v
             }
         })
+
+        // 音声出力先
+        box.addView(
+            Ui.tv(act, "音声出力先", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12))
+        )
+        val rb = Ui.ghost(act, "", Ui.FG) { }
+        rb.text = if (d.routeName.isNotEmpty()) d.routeName else Routing.label(d.route)
+        rb.setOnClickListener {
+            val ms = Routing.modes
+            val items = ms.map { Routing.label(it) }.toTypedArray()
+            AlertDialog.Builder(act).setTitle("出力先を選択")
+                .setItems(items) { _, i ->
+                    val m = ms[i]
+                    bg {
+                        val q = Net.cmd("route")
+                        q.put("mode", m)
+                        Net.ctrl(d.ip, q, 3000)
+                    }
+                    d.route = m
+                    d.routeName = Routing.label(m)
+                    rb.text = Routing.label(m)
+                    act.toast("出力先を " + Routing.label(m) + " にしました")
+                }.show()
+        }
+        box.addView(rb, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(
+            Ui.tv(act, "端末に接続されていない出力先を選ぶと自動に戻ります。", 10f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+        )
 
         box.addView(Ui.ghost(act, "🔔 テスト放送", Ui.CYAN) {
             sendTts("dev:${d.id}", "こちらは${d.floor}階、${d.name}です。テスト放送を行っています。", false)
@@ -1571,6 +1602,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             render()
         }
         head.addView(fb)
+        head.addView(Ui.ghost(act, "CSV", Ui.ACC) { exportCsv() })
         head.addView(Ui.ghost(act, "消去", Ui.RED) {
             store.clearLogs()
             render()
@@ -1606,7 +1638,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                 row.addView(Ui.tv(act, Store.stamp(at), 10f, Ui.SUB), LinearLayout.LayoutParams(Ui.dp(act, 92), Ui.WC))
                 val body = Ui.col(act)
                 body.addView(Ui.tv(act, o.optString("text"), 12f, Ui.FG))
-                body.addView(Ui.tv(act, kind, 9f, col))
+                body.addView(Ui.tv(act, kindLabel(kind), 9f, col))
                 row.addView(body, LinearLayout.LayoutParams(0, Ui.WC, 1f))
                 list.addView(row)
             }
@@ -1637,7 +1669,83 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                 11f, Ui.SUB
             ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8))
         )
+        c.addView(Ui.sep(act), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        c.addView(
+            Ui.tv(act, "🌐 遠隔端末の登録受付", 14f, Ui.FG, true),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10))
+        )
+        c.addView(
+            Ui.tv(
+                act,
+                "別サブネットやVPN越しの端末は、端末設定の「コンソールのアドレス」に " +
+                        "${Net.localIp()}:${Proto.PORT_REG} を入れると自分から登録しにきます。" +
+                        "制御は登録されたアドレスへ直接届く必要があるため、双方向に経路が通っていることが前提です。",
+                11f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
         return c
+    }
+
+    private fun kindLabel(k: String): String = when (k) {
+        "emergency" -> "緊急"
+        "broadcast" -> "放送"
+        "call" -> "通話"
+        "schedule" -> "予約"
+        "security" -> "セキュリティ"
+        "alert" -> "アラート"
+        "system" -> "システム"
+        else -> k
+    }
+
+    /** ログをCSVに書き出して共有する */
+    private fun exportCsv() {
+        bg {
+            try {
+                val dir = java.io.File(act.filesDir, "exports")
+                if (!dir.exists()) dir.mkdirs()
+                val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.JAPAN)
+                    .format(java.util.Date())
+                val f = java.io.File(dir, "housou_log_$stamp.csv")
+                val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.JAPAN)
+                val sb = StringBuilder()
+                sb.append("日時,種別,対象,定型文,内容\n")
+                val a = store.logs()
+                var i = a.length() - 1
+                while (i >= 0) {
+                    val o = a.getJSONObject(i)
+                    i--
+                    sb.append(csv(fmt.format(java.util.Date(o.optLong("at"))))).append(',')
+                    sb.append(csv(kindLabel(o.optString("kind")))).append(',')
+                    sb.append(csv(Targeting.label(o.optString("target")))).append(',')
+                    sb.append(csv(o.optString("tag"))).append(',')
+                    sb.append(csv(o.optString("text"))).append('\n')
+                }
+                f.writeText("\uFEFF" + sb.toString(), Charsets.UTF_8)
+
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    act, act.packageName + ".files", f
+                )
+                ui {
+                    val send = Intent(Intent.ACTION_SEND)
+                    send.type = "text/csv"
+                    send.putExtra(Intent.EXTRA_STREAM, uri)
+                    send.putExtra(Intent.EXTRA_SUBJECT, "放送室 ログ $stamp")
+                    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    try {
+                        act.startActivity(Intent.createChooser(send, "ログを書き出す"))
+                    } catch (e: Exception) {
+                        act.toast("共有先が見つかりません")
+                    }
+                }
+            } catch (e: Exception) {
+                ui { act.toast("書き出しに失敗しました") }
+            }
+        }
+    }
+
+    private fun csv(v: String): String {
+        val t = v.replace("\"", "\"\"")
+        return "\"" + t + "\""
     }
 
     private fun tabSettings(): View {
