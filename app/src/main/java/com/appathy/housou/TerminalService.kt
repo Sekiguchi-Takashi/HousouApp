@@ -72,6 +72,7 @@ class TerminalService : Service() {
     private var ttsReady = false
     private var wake: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var watchTh: Thread? = null
     @Volatile private var alive = false
 
     override fun onBind(intent: Intent?): IBinder? = null
