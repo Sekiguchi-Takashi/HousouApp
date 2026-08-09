@@ -62,6 +62,18 @@ class Store(ctx: Context) {
         get() = p.getBoolean("agc", true)
         set(v) = p.edit().putBoolean("agc", v).apply()
 
+    /** 日報の自動生成 */
+    var reportEnabled: Boolean
+        get() = p.getBoolean("report_on", true)
+        set(v) = p.edit().putBoolean("report_on", v).apply()
+
+    var reportHour: Int
+        get() = p.getInt("report_hour", 18)
+        set(v) = p.edit().putInt("report_hour", v).apply()
+
+    fun reports(): JSONArray = arr("reports")
+    fun saveReports(a: JSONArray) = put("reports", a.toString())
+
     /** 端末の音声出力先（auto/speaker/wired/bt/usb） */
     var route: String
         get() = s("route", "auto")

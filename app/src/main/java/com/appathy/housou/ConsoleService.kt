@@ -102,6 +102,7 @@ class ConsoleService : Service() {
     private var disasterTh: Thread? = null
     private var trigger: java.net.ServerSocket? = null
     private var regServer: java.net.ServerSocket? = null
+    private var lastReport = ""
     private var mcLock: WifiManager.MulticastLock? = null
     private var wake: PowerManager.WakeLock? = null
 
@@ -199,6 +200,35 @@ class ConsoleService : Service() {
                 }
             } catch (e: Exception) { }
         }.start()
+    }
+
+    /** 日報を生成して保存する。notify=true なら通知も出す */
+    fun makeReport(notify: Boolean): JSONObject {
+        val o = Report.build(store, Registry.all())
+        Report.save(store, o)
+        store.log("system", "日報を作成: ${o.optString("date")}")
+        if (notify) notifyReport(o)
+        push()
+        return o
+    }
+
+    private fun notifyReport(o: JSONObject) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val pi = PendingIntent.getActivity(
+                this, 0, Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val n = Notification.Builder(this, CH_ID)
+                .setContentTitle("日報ができました（${o.optString("date")}）")
+                .setContentText(Report.headline(o))
+                .setStyle(Notification.BigTextStyle().bigText(Report.headline(o)))
+                .setSmallIcon(R.drawable.ic_noti)
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .build()
+            nm.notify(3001, n)
+        } catch (e: Exception) { }
     }
 
     // ============================================================ 災害放送
@@ -466,6 +496,14 @@ class ConsoleService : Service() {
                         fire(o)
                     }
                     if (changed) store.saveSchedules(arr)
+
+                    // 日報の自動生成（1日1回）
+                    if (store.reportEnabled && hh == store.reportHour && mm == 0) {
+                        if (lastReport != stamp) {
+                            lastReport = stamp
+                            makeReport(true)
+                        }
+                    }
                 } catch (e: Exception) { }
                 var n = 0
                 while (n < 100 && alive) {

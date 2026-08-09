@@ -898,6 +898,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         val l = Ui.col(act, 14)
         val head = Ui.row(act)
         head.addView(Ui.tv(act, "📱 端末一覧", 17f, Ui.FG, true), LinearLayout.LayoutParams(0, Ui.WC, 1f))
+        head.addView(Ui.ghost(act, "一括", Ui.GREEN) { bulkDialog() })
         head.addView(Ui.ghost(act, "QRで追加", Ui.ACC) { qrAdd() })
         head.addView(Ui.ghost(act, "手動", Ui.SUB) { manualAdd() })
         l.addView(head)
@@ -981,6 +982,19 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         val bldg = Ui.edit(act, "建物名", d.building)
         box.addView(Ui.tv(act, "建物", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
         box.addView(bldg, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
+        // 平常値
+        val base = Trend.baseline(store, d.id)
+        box.addView(
+            Ui.tv(act, "この端末の平常値", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14))
+        )
+        box.addView(Ui.tv(act, base.text(), 12f, if (base.ready()) Ui.CYAN else Ui.SUB))
+        if (base.ready()) {
+            box.addView(
+                Ui.tv(act, "この幅から大きく外れたときに予兆として通知します。", 10f, Ui.SUB),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+            )
+        }
 
         // 状態の推移
         val hist = Trend.series(store, d.id, "s")
@@ -1116,6 +1130,99 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                 render()
             }
             .show()
+    }
+
+    /** 対象をまとめて設定変更する */
+    private fun bulkDialog() {
+        val targets = Targeting.resolve(targetSpec)
+        val box = Ui.col(act, 8)
+        box.addView(Ui.tv(act, "対象: ${Targeting.label(targetSpec)}（${targets.size}台）", 14f, Ui.ACC, true))
+        box.addView(
+            Ui.tv(act, "対象は放送タブの選択と連動します。オンラインの端末だけに届きます。", 11f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
+        if (targets.isEmpty()) {
+            box.addView(
+                Ui.tv(act, "対象端末がオンラインではありません。", 12f, Ui.RED),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10))
+            )
+        }
+
+        // 音量
+        box.addView(Ui.tv(act, "音量をまとめて変更", 12f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 16)))
+        val vl = Ui.tv(act, "70%", 11f, Ui.FG)
+        box.addView(vl, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        val sb = SeekBar(act)
+        sb.max = 100
+        sb.progress = 70
+        sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(v: SeekBar?, p: Int, u: Boolean) { vl.text = "${p}%" }
+            override fun onStartTrackingTouch(v: SeekBar?) { }
+            override fun onStopTrackingTouch(v: SeekBar?) { }
+        })
+        box.addView(sb, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(Ui.btn(act, "この音量を適用") {
+            bulkSend(targets, "volume") { it.put("value", sb.progress) }
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+
+        // 出力先
+        box.addView(Ui.tv(act, "音声出力先をまとめて変更", 12f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 16)))
+        for (m in Routing.modes) {
+            box.addView(Ui.ghost(act, Routing.label(m), Ui.FG) {
+                bulkSend(targets, "route") { it.put("mode", m) }
+            }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        }
+
+        // 機能
+        box.addView(Ui.tv(act, "機能", 12f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 16)))
+        val r1 = Ui.row(act)
+        r1.addView(Ui.ghost(act, "スピーカー有効", Ui.GREEN) {
+            bulkSend(targets, "spk") { it.put("on", true) }
+        }, cw())
+        r1.addView(Ui.ghost(act, "スピーカー無効", Ui.RED) {
+            bulkSend(targets, "spk") { it.put("on", false) }
+        }, cw())
+        box.addView(r1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        val r2 = Ui.row(act)
+        r2.addView(Ui.ghost(act, "マイク有効", Ui.GREEN) {
+            bulkSend(targets, "mic") { it.put("on", true) }
+        }, cw())
+        r2.addView(Ui.ghost(act, "マイク無効", Ui.SUB) {
+            bulkSend(targets, "mic") { it.put("on", false) }
+        }, cw())
+        box.addView(r2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(Ui.ghost(act, "🔔 一斉テストチャイム", Ui.CYAN) {
+            bulkSend(targets, "chime") { it.put("urgent", false) }
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        box.addView(Ui.ghost(act, "🔄 音声系を再起動", Ui.ACC) {
+            bulkSend(targets, "reboot_audio") { }
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
+        AlertDialog.Builder(act)
+            .setTitle("⚙ 一括操作")
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("閉じる", null)
+            .show()
+    }
+
+    private fun bulkSend(targets: List<Dev>, cmd: String, fill: (org.json.JSONObject) -> Unit) {
+        if (targets.isEmpty()) {
+            act.toast("対象端末がオンラインではありません")
+            return
+        }
+        bg {
+            var ok = 0
+            for (d in targets) {
+                val q = Net.cmd(cmd)
+                fill(q)
+                if (Net.ctrl(d.ip, q, 3000) != null) ok++
+            }
+            ui {
+                act.toast("$ok/${targets.size} 台に適用しました")
+                render()
+            }
+        }
+        store.log("system", "一括操作 $cmd → ${Targeting.label(targetSpec)} (${targets.size}台)", targetSpec)
     }
 
     /** 端末画面のQRを読み取って台帳へ登録 */
@@ -1602,6 +1709,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             render()
         }
         head.addView(fb)
+        head.addView(Ui.ghost(act, "日報", Ui.GREEN) { reportDialog() })
         head.addView(Ui.ghost(act, "CSV", Ui.ACC) { exportCsv() })
         head.addView(Ui.ghost(act, "消去", Ui.RED) {
             store.clearLogs()
@@ -1684,6 +1792,78 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
         )
         return c
+    }
+
+    /** 日報の一覧・閲覧・共有 */
+    private fun reportDialog() {
+        val box = Ui.col(act, 8)
+        box.addView(
+            Ui.tv(
+                act,
+                if (store.reportEnabled) "毎日 ${store.reportHour}:00 に自動生成します。"
+                else "自動生成はオフです（設定タブで変更できます）。",
+                11f, Ui.SUB
+            )
+        )
+        box.addView(Ui.btn(act, "いまの内容で今日の日報を作る") {
+            val o = ConsoleService.instance?.makeReport(false)
+            if (o == null) {
+                act.toast("コンソールが起動していません")
+            } else {
+                showReport(o)
+            }
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+
+        val a = store.reports()
+        if (a.length() == 0) {
+            box.addView(
+                Ui.tv(act, "保存された日報はまだありません。", 12f, Ui.SUB),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14))
+            )
+        }
+        var i = a.length() - 1
+        while (i >= 0) {
+            val o = a.getJSONObject(i)
+            i--
+            val row = Ui.col(act)
+            row.setPadding(0, Ui.dp(act, 8), 0, Ui.dp(act, 8))
+            row.addView(Ui.tv(act, o.optString("date"), 14f, Ui.ACC, true))
+            row.addView(Ui.tv(act, Report.headline(o), 11f, Ui.SUB))
+            row.addView(Ui.ghost(act, "開く", Ui.FG) { showReport(o) },
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+            row.addView(Ui.sep(act))
+            box.addView(row)
+        }
+
+        AlertDialog.Builder(act)
+            .setTitle("📋 日報")
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("閉じる", null)
+            .show()
+    }
+
+    private fun showReport(o: org.json.JSONObject) {
+        val text = o.optString("text")
+        val box = Ui.col(act, 8)
+        box.addView(Ui.tv(act, text, 12f, Ui.FG))
+        AlertDialog.Builder(act)
+            .setTitle("日報 " + o.optString("date"))
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("閉じる", null)
+            .setPositiveButton("共有") { _, _ -> shareText(text, "放送室 日報 " + o.optString("date")) }
+            .show()
+    }
+
+    private fun shareText(text: String, subject: String) {
+        try {
+            val send = Intent(Intent.ACTION_SEND)
+            send.type = "text/plain"
+            send.putExtra(Intent.EXTRA_SUBJECT, subject)
+            send.putExtra(Intent.EXTRA_TEXT, text)
+            act.startActivity(Intent.createChooser(send, "日報を共有"))
+        } catch (e: Exception) {
+            act.toast("共有先が見つかりません")
+        }
     }
 
     private fun kindLabel(k: String): String = when (k) {
@@ -1772,6 +1952,34 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             refresh()
         }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
         l.addView(c0)
+
+        val cr = Ui.card(act)
+        cr.addView(Ui.tv(act, "📋 日報", 16f, Ui.FG, true))
+        val rp = Ui.ghost(act, "", Ui.FG) { }
+        rp.text = if (store.reportEnabled) "自動生成: ON" else "自動生成: OFF"
+        rp.setOnClickListener {
+            store.reportEnabled = !store.reportEnabled
+            rp.text = if (store.reportEnabled) "自動生成: ON" else "自動生成: OFF"
+        }
+        cr.addView(rp, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        val rh = Ui.ghost(act, "生成時刻: ${store.reportHour}:00", Ui.FG) { }
+        rh.setOnClickListener {
+            val hours = (0..23).map { "${it}:00" }.toTypedArray()
+            AlertDialog.Builder(act).setTitle("日報の生成時刻")
+                .setItems(hours) { _, i ->
+                    store.reportHour = i
+                    rh.text = "生成時刻: ${i}:00"
+                }.show()
+        }
+        cr.addView(rh, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        cr.addView(
+            Ui.tv(
+                act,
+                "その日の放送実績・緊急放送・端末稼働率・故障予兆をまとめます。ログタブの「日報」から閲覧・共有できます。",
+                11f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8))
+        )
+        l.addView(cr, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
 
         l.addView(triggerCard(), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
 

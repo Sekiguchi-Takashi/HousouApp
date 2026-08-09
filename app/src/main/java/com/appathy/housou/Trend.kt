@@ -18,6 +18,16 @@ object Trend {
 
     class Omen(val level: Int, val title: String, val detail: String, val devId: String)
 
+    /** 端末ごとの平常値 */
+    class Base(val n: Int, val rssiMean: Double, val rssiSd: Double, val rttMean: Double, val rttSd: Double) {
+        fun ready(): Boolean = n >= 20
+        fun text(): String {
+            if (!ready()) return "学習中（${n}/20サンプル）"
+            return "電波 ${"%.0f".format(rssiMean)}±${"%.0f".format(rssiSd)}dBm / " +
+                    "応答 ${"%.0f".format(rttMean)}±${"%.0f".format(rttSd)}ms"
+        }
+    }
+
     private var lastSample = 0L
 
     /** ポーリングごとに呼ぶ。実際に記録するのは5分に1回 */
@@ -70,8 +80,67 @@ object Trend {
         return out
     }
 
+    /** 期間内の (サンプル数, オンラインだった数) */
+    fun availability(store: Store, devId: String, from: Long, to: Long): Pair<Int, Int> {
+        val a = read(store).optJSONArray(devId) ?: return Pair(0, 0)
+        var n = 0
+        var ok = 0
+        var i = 0
+        while (i < a.length()) {
+            val o = a.getJSONObject(i)
+            i++
+            val at = o.optLong("at")
+            if (at < from || at >= to) continue
+            n++
+            if (o.optInt("o", 0) == 1) ok++
+        }
+        return Pair(n, ok)
+    }
+
     fun points(store: Store, devId: String): Int =
         read(store).optJSONArray(devId)?.length() ?: 0
+
+    // -------------------------------------------------------------- 平常値
+    /**
+     * 蓄積した観測値から、その端末にとっての平常値を求める。
+     * 固定閾値だと設置環境の違いを吸収できないため、
+     * 「その端末のいつも」からどれだけ外れたかで判定する。
+     * 外れ値の影響を抑えるため中央値と四分位範囲を使う。
+     */
+    fun baseline(store: Store, devId: String): Base {
+        val a = read(store).optJSONArray(devId) ?: return Base(0, 0.0, 0.0, 0.0, 0.0)
+        val rs = ArrayList<Double>()
+        val ts = ArrayList<Double>()
+        var i = 0
+        while (i < a.length()) {
+            val o = a.getJSONObject(i)
+            i++
+            if (o.optInt("o", 0) != 1) continue
+            val r = o.optInt("r", 0)
+            if (r != 0) rs.add(r.toDouble())
+            val t = o.optInt("t", -1)
+            if (t >= 0) ts.add(t.toDouble())
+        }
+        val n = maxOf(rs.size, ts.size)
+        return Base(n, med(rs), spread(rs), med(ts), spread(ts))
+    }
+
+    private fun med(v: List<Double>): Double {
+        if (v.isEmpty()) return 0.0
+        val s = v.sorted()
+        val m = s.size / 2
+        return if (s.size % 2 == 1) s[m] else (s[m - 1] + s[m]) / 2.0
+    }
+
+    /** 四分位範囲から標準偏差相当を出す。最低値を設けて過敏化を防ぐ */
+    private fun spread(v: List<Double>): Double {
+        if (v.size < 4) return 0.0
+        val s = v.sorted()
+        val q1 = s[s.size / 4]
+        val q3 = s[s.size * 3 / 4]
+        val sd = (q3 - q1) / 1.349
+        return maxOf(sd, 1.0)
+    }
 
     // -------------------------------------------------------------- 判定
     fun omens(store: Store, list: List<Dev>): List<Omen> {
@@ -161,7 +230,38 @@ object Trend {
                 )
             }
 
-            // 5) 総合リスクの上昇
+            // 5) 平常値からの逸脱（学習済みの端末のみ）
+            val base = baseline(store, d.id)
+            if (base.ready() && d.online) {
+                if (d.rssi != 0 && base.rssiSd > 0) {
+                    val z = (base.rssiMean - d.rssi) / base.rssiSd
+                    if (z >= 3.0) {
+                        out.add(
+                            Omen(
+                                2, "${d.label()} の電波が平常より弱い",
+                                "いつもは ${"%.0f".format(base.rssiMean)}dBm 前後ですが現在 ${d.rssi}dBm。" +
+                                        "設置位置がずれたか、周囲の環境が変わった可能性があります。",
+                                d.id
+                            )
+                        )
+                    }
+                }
+                if (d.rtt >= 0 && base.rttSd > 0) {
+                    val z = (d.rtt - base.rttMean) / base.rttSd
+                    if (z >= 3.0 && d.rtt > base.rttMean + 40) {
+                        out.add(
+                            Omen(
+                                2, "${d.label()} の応答が平常より遅い",
+                                "いつもは ${"%.0f".format(base.rttMean)}ms 前後ですが現在 ${d.rtt}ms。" +
+                                        "ネットワーク側の変化が疑われます。",
+                                d.id
+                            )
+                        )
+                    }
+                }
+            }
+
+            // 6) 総合リスクの上昇
             val ss = rows.map { it.optInt("s", 0) }
             if (ss.size >= 8) {
                 val a1 = ss.take(ss.size / 2).average()
