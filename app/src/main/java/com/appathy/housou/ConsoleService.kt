@@ -103,6 +103,7 @@ class ConsoleService : Service() {
     private var trigger: java.net.ServerSocket? = null
     private var regServer: java.net.ServerSocket? = null
     private var lastReport = ""
+    private var lastSignal = ""
     private var mcLock: WifiManager.MulticastLock? = null
     private var wake: PowerManager.WakeLock? = null
 
@@ -200,6 +201,37 @@ class ConsoleService : Service() {
                 }
             } catch (e: Exception) { }
         }.start()
+    }
+
+    /**
+     * 時報。チャイムのみ / 読み上げのみ / 両方 を選べる。
+     * 読み上げは「ただいま〇時をお知らせします」の形にする。
+     */
+    private fun fireTimeSignal(hh: Int, mm: Int) {
+        val spec = store.timeSignalTarget
+        val targets = Targeting.resolve(spec)
+        if (targets.isEmpty()) return
+        val mode = store.timeSignalMode
+        val label = if (mm == 0) "${hh}時" else "${hh}時${mm}分"
+
+        Thread {
+            try {
+                if (mode == "voice" || mode == "both") {
+                    val req = Net.cmd("tts")
+                    req.put("text", "ただいま、${label}をお知らせします。")
+                    req.put("urgent", false)
+                    req.put("chime", mode == "both")
+                    for (d in targets) Net.ctrl(d.ip, req, 3500)
+                } else {
+                    val req = Net.cmd("chime")
+                    req.put("urgent", false)
+                    for (d in targets) Net.ctrl(d.ip, req, 3000)
+                }
+            } catch (e: Exception) { }
+        }.start()
+
+        store.log("schedule", "時報: $label → ${Targeting.label(spec)}", spec, "時報")
+        push()
     }
 
     /** 日報を生成して保存する。notify=true なら通知も出す */
@@ -496,6 +528,16 @@ class ConsoleService : Service() {
                         fire(o)
                     }
                     if (changed) store.saveSchedules(arr)
+
+                    // 時報
+                    if (store.timeSignalEnabled && lastSignal != stamp) {
+                        val inRange = hh >= store.timeSignalFrom && hh <= store.timeSignalTo
+                        val onMark = mm == 0 || (store.timeSignalHalf && mm == 30)
+                        if (inRange && onMark) {
+                            lastSignal = stamp
+                            fireTimeSignal(hh, mm)
+                        }
+                    }
 
                     // 日報の自動生成（1日1回）
                     if (store.reportEnabled && hh == store.reportHour && mm == 0) {

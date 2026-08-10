@@ -62,6 +62,39 @@ class Store(ctx: Context) {
         get() = p.getBoolean("agc", true)
         set(v) = p.edit().putBoolean("agc", v).apply()
 
+    // ---------- 時報 ----------
+    var timeSignalEnabled: Boolean
+        get() = p.getBoolean("ts_on", false)
+        set(v) = p.edit().putBoolean("ts_on", v).apply()
+
+    /** 鳴らす時間帯（開始時・終了時。終了時も含む） */
+    var timeSignalFrom: Int
+        get() = p.getInt("ts_from", 8)
+        set(v) = p.edit().putInt("ts_from", v).apply()
+
+    var timeSignalTo: Int
+        get() = p.getInt("ts_to", 18)
+        set(v) = p.edit().putInt("ts_to", v).apply()
+
+    /** 30分にも鳴らす */
+    var timeSignalHalf: Boolean
+        get() = p.getBoolean("ts_half", false)
+        set(v) = p.edit().putBoolean("ts_half", v).apply()
+
+    /** chime / voice / both */
+    var timeSignalMode: String
+        get() = s("ts_mode", "chime")
+        set(v) = put("ts_mode", v)
+
+    var timeSignalTarget: String
+        get() = s("ts_target", "all")
+        set(v) = put("ts_target", v)
+
+    /** 読み上げ中に本文を画面へ表示する */
+    var captionEnabled: Boolean
+        get() = p.getBoolean("caption", true)
+        set(v) = p.edit().putBoolean("caption", v).apply()
+
     /** 日報の自動生成 */
     var reportEnabled: Boolean
         get() = p.getBoolean("report_on", true)

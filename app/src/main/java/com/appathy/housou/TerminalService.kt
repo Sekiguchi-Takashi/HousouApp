@@ -50,6 +50,19 @@ class TerminalService : Service() {
         @Volatile var alertName = ""
         @Volatile var alertText = ""
         @Volatile var remoteOk = false
+
+        // ---- 字幕
+        @Volatile var captionText = ""
+        @Volatile var captionUrgent = false
+        @Volatile var captionSeq = 0
+
+        /** 字幕を即座に消す */
+        fun clearCaption() {
+            captionSeq++
+            captionText = ""
+            captionUrgent = false
+            push()
+        }
         @Volatile var playing = false
         @Volatile var talking = false
         @Volatile var lastCmd = "-"
@@ -304,6 +317,7 @@ class TerminalService : Service() {
         o.put("mic", micOn)
         o.put("spk", spkOn)
         o.put("route", store.route)
+        o.put("caption", store.captionEnabled)
         o.put("route_name", Routing.status(this, store.route))
         return o
     }
@@ -456,6 +470,13 @@ class TerminalService : Service() {
                 store.log("broadcast", "読み上げ: $text")
             }
 
+            "caption" -> {
+                store.captionEnabled = req.optBoolean("on", true)
+                if (!store.captionEnabled) clearCaption()
+                store.log("system", "字幕表示を" + (if (store.captionEnabled) "有効化" else "無効化"))
+                push()
+            }
+
             "route" -> {
                 val m = req.optString("mode", Routing.AUTO)
                 if (Routing.modes.contains(m)) {
@@ -531,11 +552,17 @@ class TerminalService : Service() {
         return o
     }
 
+    /**
+     * 読み上げ。字幕が有効なら、読み上げている間だけ本文を画面に出す。
+     * TTSの完了通知は端末によって来ないことがあるため、
+     * 文字数からの推定時間を上限として必ず消えるようにしている。
+     */
     private fun speak(text: String, urgent: Boolean) {
         val e = tts ?: return
         if (!ttsReady) {
             try { Thread.sleep(900) } catch (ex: Exception) { }
         }
+        showCaption(text, urgent)
         try {
             val n = if (urgent) 2 else 1
             var i = 0
@@ -545,6 +572,27 @@ class TerminalService : Service() {
             }
         } catch (ex: Exception) { }
     }
+
+    private fun showCaption(text: String, urgent: Boolean) {
+        if (!store.captionEnabled) return
+        captionText = text
+        captionUrgent = urgent
+        captionSeq++
+        val mine = captionSeq
+        push()
+        val repeat = if (urgent) 2 else 1
+        val ms = (2000L + text.length * 190L) * repeat
+        Thread {
+            try { Thread.sleep(ms) } catch (e: Exception) { }
+            if (captionSeq == mine) {
+                captionText = ""
+                captionUrgent = false
+                push()
+            }
+        }.start()
+    }
+
+
 
     // ------------------------------------------------------------- 音声
     private fun startPlayback(rate: Int) {

@@ -22,6 +22,7 @@ class Dev {
     var route: String = "auto"
     var routeName: String = ""
     var remote: Boolean = false
+    var caption: Boolean = true
     var lastSeen: Long = 0L
     var loss: Int = 0
 
@@ -128,6 +129,7 @@ object Registry {
         d.ver = o.optString("ver", d.ver)
         d.route = o.optString("route", d.route)
         d.routeName = o.optString("route_name", d.routeName)
+        if (o.has("caption")) d.caption = o.optBoolean("caption", d.caption)
         d.lastSeen = System.currentTimeMillis()
         return d
     }

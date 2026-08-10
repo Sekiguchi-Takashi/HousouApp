@@ -37,7 +37,12 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
     private fun tick() {
         if (!attached) return
         render()
-        h.postDelayed({ tick() }, if (TerminalService.alertOn) 700 else 2000)
+        val wait = when {
+            TerminalService.alertOn -> 700L
+            TerminalService.captionText.isNotEmpty() -> 500L
+            else -> 2000L
+        }
+        h.postDelayed({ tick() }, wait)
     }
 
     private fun startService() {
@@ -65,6 +70,10 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         if (!attached) return
         if (TerminalService.alertOn) {
             renderAlert()
+            return
+        }
+        if (TerminalService.captionText.isNotEmpty()) {
+            renderCaption()
             return
         }
         val busy = TerminalService.playing || TerminalService.talking
@@ -143,6 +152,15 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         val rb = Ui.ghost(act, "🔈 出力先: " + Routing.status(act, store.route), Ui.FG) { pickRoute() }
         l.addView(rb, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
 
+        val cb = Ui.ghost(act, "", Ui.FG) { }
+        cb.text = if (store.captionEnabled) "💬 字幕表示: ON" else "💬 字幕表示: OFF"
+        cb.setOnClickListener {
+            store.captionEnabled = !store.captionEnabled
+            if (!store.captionEnabled) TerminalService.clearCaption()
+            cb.text = if (store.captionEnabled) "💬 字幕表示: ON" else "💬 字幕表示: OFF"
+        }
+        l.addView(cb, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+
         if (!TerminalService.running) {
             l.addView(Ui.btn(act, "サービスを開始", Ui.GREEN) {
                 startService()
@@ -153,6 +171,46 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         val note = Ui.tv(act, "画面を消しても常駐します。電源に接続した状態での運用を推奨します。", 11f, Ui.SUB)
         note.gravity = Gravity.CENTER
         l.addView(note, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 22)))
+
+        root.removeAllViews()
+        root.addView(Ui.scroll(act, l))
+    }
+
+    /**
+     * 読み上げ中の字幕。
+     * 離れた位置からでも読めるよう、本文だけを大きく出す。
+     * 文字数に応じて文字サイズを落とし、長文でも収まるようにしている。
+     */
+    private fun renderCaption() {
+        val text = TerminalService.captionText
+        val urgent = TerminalService.captionUrgent
+        val l = Ui.col(act, 20)
+        l.setBackgroundColor(if (urgent) 0xFF4A1010.toInt() else 0xFF0B1420.toInt())
+        l.gravity = Gravity.CENTER_HORIZONTAL
+
+        val head = Ui.tv(
+            act,
+            if (urgent) "🚨 緊急放送" else "📢 放送中",
+            16f, if (urgent) 0xFFFF8A8A.toInt() else Ui.ACC, true
+        )
+        head.gravity = Gravity.CENTER
+        l.addView(head, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 16)))
+
+        val size = when {
+            text.length <= 20 -> 40f
+            text.length <= 40 -> 32f
+            text.length <= 80 -> 26f
+            text.length <= 140 -> 21f
+            else -> 17f
+        }
+        val body = Ui.tv(act, text, size, 0xFFFFFFFF.toInt(), true)
+        body.gravity = Gravity.CENTER
+        body.setLineSpacing(0f, 1.25f)
+        l.addView(body, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 20)))
+
+        val nm = Ui.tv(act, "${store.termFloor}F ${store.termName}", 13f, Ui.SUB)
+        nm.gravity = Gravity.CENTER
+        l.addView(nm, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 28)))
 
         root.removeAllViews()
         root.addView(Ui.scroll(act, l))

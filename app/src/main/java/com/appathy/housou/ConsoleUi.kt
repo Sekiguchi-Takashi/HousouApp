@@ -1070,6 +1070,26 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
         )
 
+        val cap = Ui.ghost(act, "", Ui.FG) { }
+        var capOn = d.caption
+        cap.text = if (capOn) "💬 字幕表示: ON" else "💬 字幕表示: OFF"
+        cap.setOnClickListener {
+            capOn = !capOn
+            val v = capOn
+            bg {
+                val q = Net.cmd("caption")
+                q.put("on", v)
+                Net.ctrl(d.ip, q, 3000)
+            }
+            d.caption = v
+            cap.text = if (v) "💬 字幕表示: ON" else "💬 字幕表示: OFF"
+        }
+        box.addView(cap, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        box.addView(
+            Ui.tv(act, "読み上げ中に本文を端末画面へ大きく表示します。", 10f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+        )
+
         box.addView(Ui.ghost(act, "🔔 テスト放送", Ui.CYAN) {
             sendTts("dev:${d.id}", "こちらは${d.floor}階、${d.name}です。テスト放送を行っています。", false)
         }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14)))
@@ -1191,6 +1211,15 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             bulkSend(targets, "mic") { it.put("on", false) }
         }, cw())
         box.addView(r2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        val r3 = Ui.row(act)
+        r3.addView(Ui.ghost(act, "字幕表示 ON", Ui.GREEN) {
+            bulkSend(targets, "caption") { it.put("on", true) }
+        }, cw())
+        r3.addView(Ui.ghost(act, "字幕表示 OFF", Ui.SUB) {
+            bulkSend(targets, "caption") { it.put("on", false) }
+        }, cw())
+        box.addView(r3, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
         box.addView(Ui.ghost(act, "🔔 一斉テストチャイム", Ui.CYAN) {
             bulkSend(targets, "chime") { it.put("urgent", false) }
         }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
@@ -1469,6 +1498,9 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
     // ============================================================ 4 予約 / 定型文
     private fun tabSchedule(): View {
         val l = Ui.col(act, 14)
+
+        l.addView(timeSignalCard(), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 0)))
+        l.addView(Ui.space(act, 12))
 
         val c0 = Ui.card(act)
         c0.addView(Ui.tv(act, "⏰ スケジュール放送", 16f, Ui.FG, true))
@@ -1792,6 +1824,111 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
         )
         return c
+    }
+
+    /** 時報の設定 */
+    private fun timeSignalCard(): LinearLayout {
+        val c = Ui.card(act)
+        c.addView(Ui.tv(act, "🕐 時報", 16f, Ui.FG, true))
+        c.addView(
+            Ui.tv(act, "毎正時に自動でチャイムや時刻の読み上げを流します。", 11f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
+
+        val on = Ui.ghost(act, "", Ui.FG) { }
+        on.text = if (store.timeSignalEnabled) "時報: ON" else "時報: OFF"
+        on.setOnClickListener {
+            store.timeSignalEnabled = !store.timeSignalEnabled
+            render()
+        }
+        c.addView(on, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+
+        if (!store.timeSignalEnabled) return c
+
+        // 時間帯
+        val r1 = Ui.row(act)
+        val fb = Ui.ghost(act, "開始 ${store.timeSignalFrom}時", Ui.FG) { }
+        fb.setOnClickListener {
+            pickHour("時報を始める時刻") { h ->
+                store.timeSignalFrom = h
+                render()
+            }
+        }
+        val tb = Ui.ghost(act, "終了 ${store.timeSignalTo}時", Ui.FG) { }
+        tb.setOnClickListener {
+            pickHour("時報を終える時刻") { h ->
+                store.timeSignalTo = h
+                render()
+            }
+        }
+        r1.addView(fb, cw())
+        r1.addView(tb, cw())
+        c.addView(r1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        c.addView(
+            Ui.tv(act, "終了時刻の正時も鳴ります（例: 8〜18 なら 18:00 まで）。", 10f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+        )
+
+        // 30分
+        val half = Ui.ghost(act, "", Ui.FG) { }
+        half.text = if (store.timeSignalHalf) "30分にも鳴らす: ON" else "30分にも鳴らす: OFF"
+        half.setOnClickListener {
+            store.timeSignalHalf = !store.timeSignalHalf
+            half.text = if (store.timeSignalHalf) "30分にも鳴らす: ON" else "30分にも鳴らす: OFF"
+        }
+        c.addView(half, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+
+        // 内容
+        c.addView(Ui.tv(act, "鳴らす内容", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        val r2 = Ui.row(act)
+        val modes = listOf("chime" to "チャイム", "voice" to "読み上げ", "both" to "両方")
+        for ((k, v) in modes) {
+            val b = Ui.ghost(act, v, if (store.timeSignalMode == k) Ui.ACC else Ui.SUB) {
+                store.timeSignalMode = k
+                render()
+            }
+            r2.addView(b, cw())
+        }
+        c.addView(r2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
+        // 対象
+        val tg = Ui.ghost(act, "対象: " + Targeting.label(store.timeSignalTarget), Ui.FG) { }
+        tg.setOnClickListener {
+            val opts = arrayOf("全館", "現在の放送対象を使う")
+            AlertDialog.Builder(act).setTitle("時報の対象")
+                .setItems(opts) { _, i ->
+                    store.timeSignalTarget = if (i == 0) "all" else targetSpec
+                    render()
+                }.show()
+        }
+        c.addView(tg, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        c.addView(Ui.ghost(act, "▶ いま試す", Ui.CYAN) {
+            val t = Targeting.resolve(store.timeSignalTarget)
+            if (t.isEmpty()) {
+                act.toast("対象端末がオンラインではありません")
+            } else {
+                val cal = java.util.Calendar.getInstance()
+                val hh = cal.get(java.util.Calendar.HOUR_OF_DAY)
+                if (store.timeSignalMode == "chime") {
+                    sendChime(store.timeSignalTarget, false)
+                } else {
+                    sendTts(
+                        store.timeSignalTarget,
+                        "ただいま、${hh}時をお知らせします。", false, "時報"
+                    )
+                }
+            }
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+
+        return c
+    }
+
+    private fun pickHour(title: String, cb: (Int) -> Unit) {
+        val hours = (0..23).map { "${it}時" }.toTypedArray()
+        AlertDialog.Builder(act).setTitle(title)
+            .setItems(hours) { _, i -> cb(i) }
+            .show()
     }
 
     /** 日報の一覧・閲覧・共有 */
