@@ -11,16 +11,27 @@ android {
         applicationId "com.appathy.housou"
         minSdk 26
         targetSdk 34
-        versionCode 9
-        versionName "1.6"
+        versionCode 10
+        versionName "1.6.1"
+    }
+
+    signingConfigs {
+        fixed {
+            storeFile rootProject.file('keystore/housou.keystore')
+            storePassword 'housou2026'
+            keyAlias 'housou'
+            keyPassword 'housou2026'
+        }
     }
 
     buildTypes {
         debug {
             minifyEnabled false
+            signingConfig signingConfigs.fixed
         }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.fixed
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
