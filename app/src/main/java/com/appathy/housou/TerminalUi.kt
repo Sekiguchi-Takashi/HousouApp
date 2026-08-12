@@ -45,6 +45,7 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         render()
         val wait = when {
             TerminalService.alertOn -> 700L
+            TerminalService.noticeUntil > System.currentTimeMillis() -> 1000L
             TerminalService.captionText.isNotEmpty() -> 500L
             else -> 2000L
         }
@@ -76,6 +77,10 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         if (!attached) return
         if (TerminalService.alertOn) {
             renderAlert()
+            return
+        }
+        if (TerminalService.noticeUntil > System.currentTimeMillis()) {
+            renderNotice()
             return
         }
         if (TerminalService.captionText.isNotEmpty()) {
@@ -225,6 +230,51 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         body.gravity = Gravity.CENTER
         body.setLineSpacing(0f, 1.25f)
         l.addView(body, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 20)))
+
+        val text2 = TerminalService.captionText2
+        if (text2.isNotEmpty()) {
+            l.addView(Ui.sep(act), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 16)))
+            val size2 = when {
+                text2.length <= 30 -> 24f
+                text2.length <= 70 -> 19f
+                else -> 15f
+            }
+            val body2 = Ui.tv(act, text2, size2, 0xFFB8D4FF.toInt(), true)
+            body2.gravity = Gravity.CENTER
+            body2.setLineSpacing(0f, 1.2f)
+            l.addView(body2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        }
+
+        val nm = Ui.tv(act, "${store.termFloor}F ${store.termName}", 13f, Ui.SUB)
+        nm.gravity = Gravity.CENTER
+        l.addView(nm, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 28)))
+
+        root.removeAllViews()
+        root.addView(Ui.scroll(act, l))
+    }
+
+    /** 放送予告のカウントダウン全画面 */
+    private fun renderNotice() {
+        val remain = ((TerminalService.noticeUntil - System.currentTimeMillis()) / 1000).toInt() + 1
+        val l = Ui.col(act, 24)
+        l.setBackgroundColor(0xFF102410.toInt())
+        l.gravity = Gravity.CENTER_HORIZONTAL
+
+        val head = Ui.tv(act, "📣 放送予告", 20f, Ui.GREEN, true)
+        head.gravity = Gravity.CENTER
+        l.addView(head, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 30)))
+
+        val cnt = Ui.tv(act, "$remain", 96f, 0xFFFFFFFF.toInt(), true)
+        cnt.gravity = Gravity.CENTER
+        l.addView(cnt, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+
+        val unit = Ui.tv(act, "秒後に放送を開始します", 16f, Ui.SUB)
+        unit.gravity = Gravity.CENTER
+        l.addView(unit, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
+        val txt = Ui.tv(act, TerminalService.noticeText, 15f, 0xFFD8F0D8.toInt())
+        txt.gravity = Gravity.CENTER
+        l.addView(txt, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 24)))
 
         val nm = Ui.tv(act, "${store.termFloor}F ${store.termName}", 13f, Ui.SUB)
         nm.gravity = Gravity.CENTER

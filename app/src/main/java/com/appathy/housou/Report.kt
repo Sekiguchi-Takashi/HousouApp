@@ -71,13 +71,24 @@ object Report {
 
         // 端末稼働率（観測サンプルのうちオンラインだった割合）
         val avail = ArrayList<String>()
+        val availJson = JSONArray()
+        var sumN = 0
+        var sumOk = 0
         var worst = 100
         for (d in devices) {
             val pts = Trend.availability(store, d.id, from, to)
             if (pts.first == 0) continue
             val pct = pts.second * 100 / pts.first
             if (pct < worst) worst = pct
+            sumN += pts.first
+            sumOk += pts.second
             avail.add("${d.label()}  ${pct}%（${pts.first}回中${pts.second}回オンライン）")
+            val aj = JSONObject()
+            aj.put("id", d.id)
+            aj.put("label", d.label())
+            aj.put("n", pts.first)
+            aj.put("ok", pts.second)
+            availJson.put(aj)
         }
 
         val sb = StringBuilder()
@@ -131,6 +142,9 @@ object Report {
         o.put("em", em)
         o.put("alerts", alertN)
         o.put("worst", if (avail.isEmpty()) -1 else worst)
+        o.put("n", sumN)
+        o.put("ok", sumOk)
+        o.put("avail", availJson)
         o.put("text", sb.toString())
         return o
     }
@@ -153,6 +167,62 @@ object Report {
             trimmed.put(out.get(k)); k++
         }
         store.saveReports(trimmed)
+    }
+
+    class Sla(
+        val month: String,
+        val pct: Double,
+        val days: Int,
+        val samples: Int,
+        val perDev: List<Pair<String, Double>>
+    )
+
+    /**
+     * 月次SLA。保存済みの日報から当月分を積算する。
+     * Trend の生データは12時間しか持たないため、日報が日次のスナップショットとして機能する。
+     * 日報が生成されなかった日は集計に含まれない（=コンソール停止日は母数に入らない）。
+     */
+    fun sla(store: Store, monthOffset: Int = 0): Sla {
+        val cal = Calendar.getInstance()
+        cal.add(Calendar.MONTH, monthOffset)
+        val ym = SimpleDateFormat("yyyy-MM", Locale.JAPAN).format(cal.time)
+
+        val a = store.reports()
+        var n = 0
+        var ok = 0
+        var days = 0
+        val devN = HashMap<String, Int>()
+        val devOk = HashMap<String, Int>()
+        val devLabel = HashMap<String, String>()
+        var i = 0
+        while (i < a.length()) {
+            val o = a.getJSONObject(i)
+            i++
+            if (!o.optString("date").startsWith(ym)) continue
+            val dn = o.optInt("n", 0)
+            if (dn == 0) continue
+            days++
+            n += dn
+            ok += o.optInt("ok", 0)
+            val aj = o.optJSONArray("avail") ?: continue
+            var k = 0
+            while (k < aj.length()) {
+                val e = aj.getJSONObject(k)
+                k++
+                val id = e.optString("id")
+                devN[id] = (devN[id] ?: 0) + e.optInt("n")
+                devOk[id] = (devOk[id] ?: 0) + e.optInt("ok")
+                devLabel[id] = e.optString("label")
+            }
+        }
+        val per = ArrayList<Pair<String, Double>>()
+        for ((id, dn) in devN) {
+            if (dn == 0) continue
+            per.add(Pair(devLabel[id] ?: id, (devOk[id] ?: 0) * 100.0 / dn))
+        }
+        per.sortBy { it.second }
+        val pct = if (n == 0) -1.0 else ok * 100.0 / n
+        return Sla(ym, pct, days, n, per)
     }
 
     fun headline(o: JSONObject): String {

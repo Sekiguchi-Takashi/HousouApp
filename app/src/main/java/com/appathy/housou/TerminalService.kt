@@ -53,8 +53,13 @@ class TerminalService : Service() {
         @Volatile var held = false
         @Volatile var kioskChanged = false
 
+        // ---- 放送予告カウントダウン
+        @Volatile var noticeUntil = 0L
+        @Volatile var noticeText = ""
+
         // ---- 字幕
         @Volatile var captionText = ""
+        @Volatile var captionText2 = ""
         @Volatile var captionUrgent = false
         @Volatile var captionSeq = 0
 
@@ -62,6 +67,7 @@ class TerminalService : Service() {
         fun clearCaption() {
             captionSeq++
             captionText = ""
+            captionText2 = ""
             captionUrgent = false
             push()
         }
@@ -456,8 +462,32 @@ class TerminalService : Service() {
                 store.log("broadcast", if (urgent) "緊急チャイム受信" else "チャイム受信")
             }
 
+            "notice" -> {
+                val sec = req.optInt("sec", 30).coerceIn(3, 300)
+                noticeText = req.optString("text", "まもなく放送を開始します")
+                noticeUntil = System.currentTimeMillis() + sec * 1000L
+                if (spkOn && req.optBoolean("chime", true)) {
+                    Thread {
+                        Audio.playBlob(
+                            Proto.RATE_HIGH, Audio.chime(Proto.RATE_HIGH, false),
+                            this@TerminalService, store.route
+                        )
+                    }.start()
+                }
+                store.log("broadcast", "放送予告: ${sec}秒")
+                push()
+            }
+
+            "notice_cancel" -> {
+                noticeUntil = 0L
+                noticeText = ""
+                push()
+            }
+
             "tts" -> {
                 val text = req.optString("text")
+                val text2 = req.optString("text2")
+                val lang2 = req.optString("lang2")
                 val urgent = req.optBoolean("urgent", false)
                 if (spkOn && text.isNotEmpty()) {
                     if (urgent) setVolumePercent(100)
@@ -468,7 +498,7 @@ class TerminalService : Service() {
                                 this@TerminalService, store.route
                             )
                         }
-                        speak(text, urgent)
+                        speak(text, urgent, text2, lang2)
                     }.start()
                 }
                 store.log("broadcast", "読み上げ: $text")
@@ -586,35 +616,54 @@ class TerminalService : Service() {
      * TTSの完了通知は端末によって来ないことがあるため、
      * 文字数からの推定時間を上限として必ず消えるようにしている。
      */
-    private fun speak(text: String, urgent: Boolean) {
+    private fun speak(text: String, urgent: Boolean, text2: String = "", lang2: String = "") {
         val e = tts ?: return
         if (!ttsReady) {
             try { Thread.sleep(900) } catch (ex: Exception) { }
         }
-        showCaption(text, urgent)
+        val hasSecond = text2.isNotEmpty() && lang2.isNotEmpty()
+        showCaption(text, urgent, if (hasSecond) text2 else "")
         try {
             val n = if (urgent) 2 else 1
             var i = 0
             while (i < n) {
+                e.language = Locale.JAPANESE
                 e.speak(text, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "h$i")
+                if (hasSecond) {
+                    // 言語を切り替えて続けて読む。QUEUE_ADD の実行時点の
+                    // 言語が使われるとは限らない実装があるため、
+                    // playSilentUtterance で区切ってから切替→追加する
+                    e.playSilentUtterance(400, TextToSpeech.QUEUE_ADD, "s$i")
+                    val l = Lang.byCode(lang2)
+                    if (l != null) {
+                        try { e.language = l.locale } catch (ex: Exception) { }
+                        e.speak(text2, TextToSpeech.QUEUE_ADD, null, "h2$i")
+                    }
+                }
                 i++
+            }
+            if (hasSecond) {
+                // 読み終わり後に日本語へ戻すための空発話
+                e.playSilentUtterance(100, TextToSpeech.QUEUE_ADD, "rst")
             }
         } catch (ex: Exception) { }
     }
 
-    private fun showCaption(text: String, urgent: Boolean) {
+    private fun showCaption(text: String, urgent: Boolean, text2: String = "") {
         if (!store.captionEnabled) return
         captionText = text
+        captionText2 = text2
         captionUrgent = urgent
         captionSeq++
         val mine = captionSeq
         push()
         val repeat = if (urgent) 2 else 1
-        val ms = (2000L + text.length * 190L) * repeat
+        val ms = (2000L + (text.length + text2.length) * 190L) * repeat
         Thread {
             try { Thread.sleep(ms) } catch (e: Exception) { }
             if (captionSeq == mine) {
                 captionText = ""
+                captionText2 = ""
                 captionUrgent = false
                 push()
             }

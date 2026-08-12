@@ -34,6 +34,9 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
     private var callTarget: Dev? = null
     private var alwaysTalk = false
     private var callHeld = false
+    private var secondLang = ""
+    private var secondText = ""
+    private var noticeSec = 30
     private var assistantReply = ""
 
     private val refreshers = ArrayList<() -> Unit>()
@@ -275,6 +278,16 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
         l.addView(cD, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
 
+        // 月次稼働率（SLA）
+        val cA = Ui.card(act)
+        cA.addView(Ui.tv(act, "📈 今月の稼働率", 16f, Ui.FG, true))
+        val slaMain = Ui.tv(act, "", 32f, Ui.GREEN, true)
+        cA.addView(slaMain, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        val slaSub = Ui.tv(act, "", 11f, Ui.SUB)
+        cA.addView(slaSub, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        cA.addView(Ui.ghost(act, "内訳を見る", Ui.CYAN) { slaDialog() }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        l.addView(cA, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
         // 故障予兆
         val cO = Ui.card(act)
         cO.addView(Ui.tv(act, "📉 故障予兆", 16f, Ui.FG, true))
@@ -321,6 +334,23 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             if (ConsoleService.disasterOn) {
                 dText.text = "🚨 ${ConsoleService.disasterName} を放送中" +
                         "（${ConsoleService.disasterRound}/${ConsoleService.disasterTotal}回目）"
+            }
+
+            val sla = Report.sla(store)
+            if (sla.pct < 0) {
+                slaMain.text = "—"
+                slaMain.setTextColor(Ui.SUB)
+                slaSub.text = "日報が貯まると集計されます（毎日の自動生成をONにしてください）。"
+            } else {
+                slaMain.text = String.format("%.1f%%", sla.pct)
+                slaMain.setTextColor(
+                    when {
+                        sla.pct >= 99.0 -> Ui.GREEN
+                        sla.pct >= 95.0 -> Ui.ACC
+                        else -> Ui.RED
+                    }
+                )
+                slaSub.text = "${sla.month} / ${sla.days}日分・${sla.samples}サンプルから算出"
             }
 
             omens.removeAllViews()
@@ -522,10 +552,46 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         val te = Ui.edit(act, "放送する文章")
         te.setSingleLine(false)
         c3.addView(te, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
-        c3.addView(Ui.btn(act, "読み上げて放送") {
+
+        // 第2言語（任意）
+        val langBtn = Ui.ghost(act, "🌐 第2言語: " + (if (secondLang.isEmpty()) "なし" else Lang.label(secondLang)), Ui.SUB) { }
+        langBtn.setOnClickListener {
+            val items = ArrayList<String>()
+            items.add("なし")
+            items.addAll(Lang.all.map { it.name })
+            AlertDialog.Builder(act).setTitle("第2言語")
+                .setItems(items.toTypedArray()) { _, i ->
+                    secondLang = if (i == 0) "" else Lang.all[i - 1].code
+                    render()
+                }.show()
+        }
+        c3.addView(langBtn, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        val te2 = Ui.edit(act, "第2言語の文章（翻訳した文を入力）")
+        te2.setSingleLine(false)
+        te2.setText(secondText)
+        if (secondLang.isEmpty()) te2.visibility = View.GONE
+        c3.addView(te2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        if (secondLang.isNotEmpty()) {
+            c3.addView(
+                Ui.tv(act, "日本語→${Lang.label(secondLang)}の順に読み上げ、字幕も2段で表示します。読み上げには端末側に該当言語の音声データが必要です。", 10f, Ui.SUB),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+            )
+        }
+
+        val rb = Ui.row(act)
+        rb.addView(Ui.btn(act, "読み上げて放送") {
+            secondText = te2.text.toString()
             val t = te.text.toString()
-            if (t.isBlank()) act.toast("文章を入力してください") else sendTts(targetSpec, t, false)
-        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+            if (t.isBlank()) act.toast("文章を入力してください")
+            else sendTts(targetSpec, t, false, "", secondText.trim(), secondLang)
+        }, cw())
+        rb.addView(Ui.btn(act, "📣 予告つき", Ui.CARD2, Ui.FG) {
+            secondText = te2.text.toString()
+            val t = te.text.toString()
+            if (t.isBlank()) act.toast("文章を入力してください")
+            else noticeDialog(t, secondText.trim())
+        }, cw())
+        c3.addView(rb, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
 
         val tpl = store.templates()
         if (tpl.length() > 0) {
@@ -671,6 +737,38 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         store.log("broadcast", "チャイム → ${Targeting.label(spec)}", spec, "チャイム")
     }
 
+    /**
+     * 予告つき放送。全端末にカウントダウン字幕を出し、
+     * 満了後に本文の読み上げをコンソール側のタイマーで送る。
+     */
+    private fun noticeDialog(text: String, text2: String) {
+        val secs = listOf(10, 20, 30, 60, 120)
+        AlertDialog.Builder(act).setTitle("何秒前から予告しますか")
+            .setItems(secs.map { "${it}秒前" }.toTypedArray()) { _, i ->
+                startNoticed(secs[i], text, text2)
+            }.show()
+    }
+
+    private fun startNoticed(sec: Int, text: String, text2: String) {
+        val targets = Targeting.resolve(targetSpec)
+        if (targets.isEmpty()) {
+            act.toast("対象端末がオンラインではありません")
+            return
+        }
+        noticeSec = sec
+        bg {
+            val req = Net.cmd("notice")
+            req.put("sec", sec)
+            req.put("text", "この後、放送があります")
+            req.put("chime", true)
+            for (d in targets) Net.ctrl(d.ip, req, 3000)
+            ui { act.toast("${sec}秒前の予告を開始しました") }
+            try { Thread.sleep(sec * 1000L) } catch (e: Exception) { }
+            ui { sendTts(targetSpec, text, false, "", text2, secondLang) }
+        }
+        store.log("broadcast", "予告つき放送（${sec}秒前）→ ${Targeting.label(targetSpec)}", targetSpec)
+    }
+
     /** 災害シナリオを選んで自動反復放送を開始する */
     private fun disasterDialog() {
         if (ConsoleService.disasterOn) {
@@ -726,7 +824,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         dlg.show()
     }
 
-    private fun sendTts(spec: String, text: String, urgent: Boolean, tag: String = "") {
+    private fun sendTts(spec: String, text: String, urgent: Boolean, tag: String = "", text2: String = "", lang2: String = "") {
         val targets = Targeting.resolve(spec)
         if (targets.isEmpty()) {
             act.toast("対象端末がオンラインではありません")
@@ -738,6 +836,10 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             req.put("text", text)
             req.put("urgent", urgent)
             req.put("chime", true)
+            if (text2.isNotEmpty() && lang2.isNotEmpty()) {
+                req.put("text2", text2)
+                req.put("lang2", lang2)
+            }
             for (d in targets) Net.ctrl(d.ip, req, 3500)
             ui { act.toast("読み上げを送信しました (${targets.size}台)") }
         }
@@ -2044,6 +2146,59 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         val hours = (0..23).map { "${it}時" }.toTypedArray()
         AlertDialog.Builder(act).setTitle(title)
             .setItems(hours) { _, i -> cb(i) }
+            .show()
+    }
+
+    /** 月次稼働率の内訳 */
+    private fun slaDialog() {
+        val box = Ui.col(act, 8)
+        for (off in 0 downTo -1) {
+            val sla = Report.sla(store, off)
+            box.addView(
+                Ui.tv(act, sla.month + if (off == 0) "（今月）" else "（先月）", 15f, Ui.ACC, true),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, if (off == 0) 0 else 16))
+            )
+            if (sla.pct < 0) {
+                box.addView(Ui.tv(act, "データがありません。", 12f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+                continue
+            }
+            box.addView(
+                Ui.tv(act, String.format("全体 %.1f%%（%d日分）", sla.pct, sla.days), 13f, Ui.FG, true),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+            )
+            for ((label, pct) in sla.perDev) {
+                val col = when {
+                    pct >= 99.0 -> Ui.GREEN
+                    pct >= 95.0 -> Ui.ACC
+                    else -> Ui.RED
+                }
+                box.addView(
+                    Ui.tv(act, String.format("・%s  %.1f%%", label, pct), 12f, col),
+                    Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 3))
+                )
+            }
+        }
+        box.addView(
+            Ui.tv(
+                act,
+                "日報の稼働サンプル（5分間隔の観測）を月単位で積算しています。コンソールが停止していた日は母数に含まれません。",
+                10f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14))
+        )
+        AlertDialog.Builder(act)
+            .setTitle("📈 稼働率の内訳")
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("閉じる", null)
+            .setPositiveButton("共有") { _, _ ->
+                val sla = Report.sla(store)
+                val sb = StringBuilder()
+                sb.append("放送室 稼働率レポート ").append(sla.month).append('\n')
+                sb.append(String.format("全体 %.1f%%（%d日分・%dサンプル）", sla.pct, sla.days, sla.samples)).append('\n')
+                for ((label, pct) in sla.perDev) {
+                    sb.append(String.format("%s  %.1f%%", label, pct)).append('\n')
+                }
+                shareText(sb.toString(), "放送室 稼働率 " + sla.month)
+            }
             .show()
     }
 
