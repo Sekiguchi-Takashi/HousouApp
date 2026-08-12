@@ -90,6 +90,11 @@ class Store(ctx: Context) {
         get() = s("ts_target", "all")
         set(v) = put("ts_target", v)
 
+    /** キオスクモード（画面ピン留め＋設定PIN必須） */
+    var kioskEnabled: Boolean
+        get() = p.getBoolean("kiosk", false)
+        set(v) = p.edit().putBoolean("kiosk", v).apply()
+
     /** 読み上げ中に本文を画面へ表示する */
     var captionEnabled: Boolean
         get() = p.getBoolean("caption", true)

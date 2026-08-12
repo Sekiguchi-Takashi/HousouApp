@@ -280,6 +280,9 @@ class ConsoleService : Service() {
         val t = Thread {
             try {
                 val targets = Targeting.resolve(spec)
+                // 元の音量を控えておく（終了時に戻す）
+                prevVolumes.clear()
+                for (d in targets) prevVolumes[d.ip] = d.volume
                 // 端末を警報表示に切り替え、音量を最大化
                 val on = Net.cmd("alert")
                 on.put("on", true)
@@ -323,6 +326,8 @@ class ConsoleService : Service() {
         t.start()
     }
 
+    private val prevVolumes = HashMap<String, Int>()
+
     private fun finishDisaster(spec: String) {
         val was = disasterName
         disasterOn = false
@@ -331,7 +336,14 @@ class ConsoleService : Service() {
         try {
             val off = Net.cmd("alert")
             off.put("on", false)
-            for (d in Targeting.resolve(spec)) Net.ctrl(d.ip, off, 2000)
+            for (d in Targeting.resolve(spec)) {
+                Net.ctrl(d.ip, off, 2000)
+                val pv = prevVolumes[d.ip]
+                if (pv != null && pv in 1..99) {
+                    Net.ctrl(d.ip, Net.cmd("volume").put("value", pv), 2000)
+                }
+            }
+            prevVolumes.clear()
         } catch (e: Exception) { }
         store.log("emergency", "災害放送を終了: $was")
         push()

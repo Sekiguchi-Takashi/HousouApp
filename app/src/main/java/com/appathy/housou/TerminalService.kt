@@ -50,6 +50,8 @@ class TerminalService : Service() {
         @Volatile var alertName = ""
         @Volatile var alertText = ""
         @Volatile var remoteOk = false
+        @Volatile var held = false
+        @Volatile var kioskChanged = false
 
         // ---- 字幕
         @Volatile var captionText = ""
@@ -84,6 +86,7 @@ class TerminalService : Service() {
     private var ctrlTh: Thread? = null
     private var server: ServerSocket? = null
     private var receiver: Audio.Receiver? = null
+    @Volatile private var playRate = Proto.RATE_HIGH
     private var sender: Audio.Sender? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -318,6 +321,7 @@ class TerminalService : Service() {
         o.put("spk", spkOn)
         o.put("route", store.route)
         o.put("caption", store.captionEnabled)
+        o.put("kiosk", store.kioskEnabled)
         o.put("route_name", Routing.status(this, store.route))
         return o
     }
@@ -470,6 +474,14 @@ class TerminalService : Service() {
                 store.log("broadcast", "読み上げ: $text")
             }
 
+            "kiosk" -> {
+                val on = req.optBoolean("on", true)
+                store.kioskEnabled = on
+                store.log("security", "コンソールからキオスク" + (if (on) "有効化" else "無効化"))
+                kioskChanged = true
+                push()
+            }
+
             "caption" -> {
                 store.captionEnabled = req.optBoolean("on", true)
                 if (!store.captionEnabled) clearCaption()
@@ -483,8 +495,9 @@ class TerminalService : Service() {
                     store.route = m
                     store.log("system", "音声出力先を変更: " + Routing.label(m))
                     if (playing) {
+                        val r = playRate
                         stopPlayback()
-                        startPlayback(Proto.RATE_HIGH)
+                        startPlayback(r)
                     }
                     push()
                 }
@@ -525,6 +538,22 @@ class TerminalService : Service() {
                 if (micOn && hasMic()) startTalk(ip, rate)
                 talking = true
                 store.log("call", "通話開始 ($ip)")
+            }
+
+            "hold" -> {
+                val on = req.optBoolean("on", true)
+                held = on
+                if (on) {
+                    stopTalk()
+                    startHoldTone()
+                    store.log("call", "保留")
+                } else {
+                    stopHoldTone()
+                    val ip = req.optString("console_ip", consoleIp)
+                    if (micOn && hasMic()) startTalk(ip, playRate)
+                    store.log("call", "保留解除")
+                }
+                push()
             }
 
             "talk_stop" -> {
@@ -597,6 +626,7 @@ class TerminalService : Service() {
     // ------------------------------------------------------------- 音声
     private fun startPlayback(rate: Int) {
         if (receiver != null) return
+        playRate = rate
         val r = Audio.Receiver(rate, Proto.PORT_AUDIO_DOWN)
         r.routeCtx = this
         r.routeMode = store.route
@@ -612,6 +642,44 @@ class TerminalService : Service() {
         receiver = null
         playing = false
         push()
+    }
+
+    @Volatile private var holdRunning = false
+    private var holdTh: Thread? = null
+
+    /** 保留中、端末側で保留音を小さくループ再生する */
+    private fun startHoldTone() {
+        if (holdRunning) return
+        holdRunning = true
+        val t = Thread {
+            val tone = Audio.holdTone(Proto.RATE_HIGH)
+            val p = Audio.Player(Proto.RATE_HIGH)
+            p.routeCtx = this
+            p.routeMode = store.route
+            p.start()
+            val buf = ByteArray(3200)
+            var pos = 0
+            while (holdRunning) {
+                var i = 0
+                while (i + 1 < buf.size) {
+                    val v = tone[pos].toInt()
+                    buf[i] = (v and 0xFF).toByte()
+                    buf[i + 1] = ((v shr 8) and 0xFF).toByte()
+                    pos = (pos + 1) % tone.size
+                    i += 2
+                }
+                p.write(buf, buf.size)
+            }
+            p.stop()
+        }
+        holdTh = t
+        t.start()
+    }
+
+    private fun stopHoldTone() {
+        holdRunning = false
+        try { holdTh?.join(300) } catch (e: Exception) { }
+        holdTh = null
     }
 
     private fun startTalk(ip: String, rate: Int) {
@@ -630,6 +698,7 @@ class TerminalService : Service() {
     override fun onDestroy() {
         alive = false
         running = false
+        stopHoldTone()
         stopTalk()
         stopPlayback()
         try { server?.close() } catch (e: Exception) { }

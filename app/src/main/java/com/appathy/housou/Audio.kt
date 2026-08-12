@@ -268,6 +268,28 @@ object Audio {
         p.stop()
     }
 
+    /** 保留音（2音のやわらかい繰り返し、約2秒） */
+    fun holdTone(rate: Int): ShortArray {
+        val len = rate * 2
+        val out = ShortArray(len)
+        var i = 0
+        while (i < len) {
+            val t = i.toDouble() / rate
+            val seg = (t % 2.0)
+            val f = if (seg < 1.0) 523.25 else 659.25   // C5 -> E5
+            val local = seg % 1.0
+            // 各音の立ち上がり/減衰
+            val env = when {
+                local < 0.05 -> local / 0.05
+                local > 0.55 -> maxOf(0.0, (0.75 - local) / 0.2)
+                else -> 1.0
+            }
+            out[i] = (Math.sin(2 * Math.PI * f * t) * 6500 * env).toInt().toShort()
+            i++
+        }
+        return out
+    }
+
     // ---------------------------------------------------------------- 送信（マイク -> 相手）
     class Sender(private val rate: Int, agcOn: Boolean) {
         private var sock: DatagramSocket? = null

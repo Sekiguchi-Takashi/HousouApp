@@ -11,8 +11,8 @@ android {
         applicationId "com.appathy.housou"
         minSdk 26
         targetSdk 34
-        versionCode 7
-        versionName "1.5"
+        versionCode 9
+        versionName "1.6"
     }
 
     buildTypes {

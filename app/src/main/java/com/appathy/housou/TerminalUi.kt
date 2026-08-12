@@ -25,6 +25,7 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         attached = true
         startService()
         TerminalService.onUpdate = { render() }
+        resumeKiosk()
         render()
         tick()
     }
@@ -36,6 +37,11 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
 
     private fun tick() {
         if (!attached) return
+        if (TerminalService.kioskChanged) {
+            TerminalService.kioskChanged = false
+            if (store.kioskEnabled) startKiosk()
+            else try { act.stopLockTask() } catch (e: Exception) { }
+        }
         render()
         val wait = when {
             TerminalService.alertOn -> 700L
@@ -152,6 +158,18 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
         val rb = Ui.ghost(act, "🔈 出力先: " + Routing.status(act, store.route), Ui.FG) { pickRoute() }
         l.addView(rb, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
 
+        val kb = Ui.ghost(act, "", if (store.kioskEnabled) Ui.ACC else Ui.FG) { }
+        kb.text = if (store.kioskEnabled) "🔒 キオスクモード: ON" else "🔒 キオスクモード: OFF"
+        kb.setOnClickListener {
+            if (store.kioskEnabled) {
+                // 解除はPIN必須
+                askKioskOff()
+            } else {
+                confirmKioskOn()
+            }
+        }
+        l.addView(kb, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+
         val cb = Ui.ghost(act, "", Ui.FG) { }
         cb.text = if (store.captionEnabled) "💬 字幕表示: ON" else "💬 字幕表示: OFF"
         cb.setOnClickListener {
@@ -214,6 +232,65 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
 
         root.removeAllViews()
         root.addView(Ui.scroll(act, l))
+    }
+
+    /**
+     * キオスクモード。
+     * Androidの画面ピン留め（Lock Task）でこのアプリから出られなくする。
+     * 端末管理者権限は使わないため、初回はOSの確認ダイアログが出る。
+     * 解除はアプリ内トグル（PIN必須）か、OSの解除操作（戻る＋タスクキー長押し）。
+     */
+    private fun confirmKioskOn() {
+        AlertDialog.Builder(act)
+            .setTitle("キオスクモードを開始")
+            .setMessage(
+                "画面がこのアプリに固定され、ホームや他のアプリへ移動できなくなります。\n\n" +
+                "解除するにはこのボタンをもう一度押してPINを入力するか、" +
+                "「戻る」と「タスク一覧」を同時に長押しします。\n\n" +
+                "開始時にAndroidの確認が表示されたら「はい」を選んでください。"
+            )
+            .setPositiveButton("開始") { _, _ ->
+                store.kioskEnabled = true
+                startKiosk()
+                render()
+            }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
+    private fun startKiosk() {
+        try {
+            act.startLockTask()
+            store.log("security", "キオスクモードを開始")
+        } catch (e: Exception) {
+            act.toast("ピン留めを開始できませんでした")
+        }
+    }
+
+    private fun askKioskOff() {
+        val input = Ui.edit(act, "PIN", "")
+        input.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+        AlertDialog.Builder(act)
+            .setTitle("キオスクモードを解除")
+            .setView(input)
+            .setPositiveButton("解除") { _, _ ->
+                if (input.text.toString() == store.pin) {
+                    store.kioskEnabled = false
+                    try { act.stopLockTask() } catch (e: Exception) { }
+                    store.log("security", "キオスクモードを解除")
+                    render()
+                } else {
+                    act.toast("PINが違います")
+                    store.log("security", "キオスク解除のPIN不一致")
+                }
+            }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
+    /** サービス起動後に呼ばれる。キオスク設定が残っていれば再固定する */
+    fun resumeKiosk() {
+        if (store.kioskEnabled) startKiosk()
     }
 
     /** 音声出力先の切り替え（接続済みのものだけ出す） */

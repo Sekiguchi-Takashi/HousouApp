@@ -33,6 +33,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
     private var targetSpec = "all"
     private var callTarget: Dev? = null
     private var alwaysTalk = false
+    private var callHeld = false
     private var assistantReply = ""
 
     private val refreshers = ArrayList<() -> Unit>()
@@ -806,7 +807,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         ptt.background = g
         ptt.setPadding(0, Ui.dp(act, 36), 0, Ui.dp(act, 36))
         ptt.setOnTouchListener { v, ev ->
-            if (!ConsoleService.calling) return@setOnTouchListener false
+            if (!ConsoleService.calling || callHeld) return@setOnTouchListener false
             when (ev.action) {
                 MotionEvent.ACTION_DOWN -> { talkOn(); v.alpha = 0.75f; true }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -827,6 +828,16 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         }
         sw.text = if (alwaysTalk) "🔁 双方向通話: ON（常時送話）" else "🔁 双方向通話: OFF（Push-to-Talk）"
         c1.addView(sw, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        val r2 = Ui.row(act)
+        val holdBtn = Ui.ghost(act, if (callHeld) "▶ 保留解除" else "⏸ 保留", Ui.ACC) { toggleHold() }
+        r2.addView(holdBtn, cw())
+        r2.addView(Ui.ghost(act, "⇄ 転送", Ui.CYAN) { transferCall() }, cw())
+        c1.addView(r2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        c1.addView(
+            Ui.tv(act, "保留中は相手側に保留音が流れます。転送は通話相手を別の端末へ切り替えます。", 10f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+        )
         l.addView(c1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
 
         val c2 = Ui.card(act)
@@ -859,6 +870,10 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             act.toast("端末を選択してください")
             return
         }
+        if (Mixer.micActive) {
+            act.toast("マイク放送中は通話を開始できません")
+            return
+        }
         val rate = store.rate
         ConsoleService.calling = true
         ConsoleService.callTargetId = d.id
@@ -875,6 +890,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
 
     private fun endCall() {
         val d = callTarget
+        callHeld = false
         ConsoleService.calling = false
         bg {
             ConsoleService.stopTx()
@@ -882,6 +898,76 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             if (d != null) Net.ctrl(d.ip, Net.cmd("talk_stop"), 3000)
         }
         store.log("call", "通話終了")
+    }
+
+    /** 保留。相手の送話を止めて保留音を流す。こちらの送話も止める */
+    private fun toggleHold() {
+        val d = callTarget
+        if (!ConsoleService.calling || d == null) {
+            act.toast("通話中ではありません")
+            return
+        }
+        callHeld = !callHeld
+        val on = callHeld
+        bg {
+            ConsoleService.stopTx()
+            val q = Net.cmd("hold")
+            q.put("on", on)
+            q.put("console_ip", Net.localIp())
+            Net.ctrl(d.ip, q, 3000)
+            if (!on && alwaysTalk) {
+                ConsoleService.startTx(listOf(d.ip), store.rate, store.autoGain)
+            }
+            ui { render() }
+        }
+        store.log("call", if (on) "保留: ${d.label()}" else "保留解除: ${d.label()}")
+    }
+
+    /**
+     * 転送。現在の相手との通話を終了し、選んだ端末と通話を張り直す。
+     * 旧相手には talk_stop、新相手には talk_start。保留状態は引き継がない。
+     */
+    private fun transferCall() {
+        val cur = callTarget
+        if (!ConsoleService.calling || cur == null) {
+            act.toast("通話中ではありません")
+            return
+        }
+        val ds = Registry.online().filter { it.id != cur.id }
+        if (ds.isEmpty()) {
+            act.toast("転送先の端末がありません")
+            return
+        }
+        AlertDialog.Builder(act).setTitle("転送先を選択")
+            .setItems(ds.map { it.label() }.toTypedArray()) { _, i ->
+                val next = ds[i]
+                bg {
+                    // 旧相手を切る
+                    ConsoleService.stopTx()
+                    Net.ctrl(cur.ip, Net.cmd("talk_stop"), 3000)
+                    // 新相手へ張り直す
+                    val req = Net.cmd("talk_start")
+                    req.put("rate", store.rate)
+                    req.put("console_ip", Net.localIp())
+                    val res = Net.ctrl(next.ip, req, 3000)
+                    ui {
+                        if (res == null) {
+                            act.toast("${next.label()} に接続できませんでした")
+                            endCall()
+                        } else {
+                            callTarget = next
+                            callHeld = false
+                            ConsoleService.callTargetId = next.id
+                            if (alwaysTalk) {
+                                bg { ConsoleService.startTx(listOf(next.ip), store.rate, store.autoGain) }
+                            }
+                            act.toast("${next.label()} へ転送しました")
+                            render()
+                        }
+                    }
+                }
+                store.log("call", "転送: ${cur.label()} → ${next.label()}")
+            }.show()
     }
 
     private fun talkOn() {
@@ -1090,6 +1176,27 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
         )
 
+        val kio = Ui.ghost(act, "", Ui.FG) { }
+        var kioOn = d.kiosk
+        kio.text = if (kioOn) "🔒 キオスクモード: ON" else "🔒 キオスクモード: OFF"
+        kio.setOnClickListener {
+            kioOn = !kioOn
+            val v = kioOn
+            bg {
+                val q = Net.cmd("kiosk")
+                q.put("on", v)
+                Net.ctrl(d.ip, q, 3000)
+            }
+            d.kiosk = v
+            kio.text = if (v) "🔒 キオスクモード: ON" else "🔒 キオスクモード: OFF"
+            act.toast(if (v) "キオスクを有効化しました" else "キオスクを解除しました")
+        }
+        box.addView(kio, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        box.addView(
+            Ui.tv(act, "端末を待機画面に固定し、他のアプリへ移動できなくします。端末側での解除にはPINが必要です。", 10f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+        )
+
         box.addView(Ui.ghost(act, "🔔 テスト放送", Ui.CYAN) {
             sendTts("dev:${d.id}", "こちらは${d.floor}階、${d.name}です。テスト放送を行っています。", false)
         }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14)))
@@ -1211,6 +1318,15 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             bulkSend(targets, "mic") { it.put("on", false) }
         }, cw())
         box.addView(r2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        val r4 = Ui.row(act)
+        r4.addView(Ui.ghost(act, "キオスク ON", Ui.GREEN) {
+            bulkSend(targets, "kiosk") { it.put("on", true) }
+        }, cw())
+        r4.addView(Ui.ghost(act, "キオスク OFF", Ui.SUB) {
+            bulkSend(targets, "kiosk") { it.put("on", false) }
+        }, cw())
+        box.addView(r4, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
         val r3 = Ui.row(act)
         r3.addView(Ui.ghost(act, "字幕表示 ON", Ui.GREEN) {
             bulkSend(targets, "caption") { it.put("on", true) }
@@ -2033,7 +2149,8 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                     i--
                     sb.append(csv(fmt.format(java.util.Date(o.optLong("at"))))).append(',')
                     sb.append(csv(kindLabel(o.optString("kind")))).append(',')
-                    sb.append(csv(Targeting.label(o.optString("target")))).append(',')
+                    val tgt = o.optString("target")
+                    sb.append(csv(if (tgt.isEmpty()) "" else Targeting.label(tgt))).append(',')
                     sb.append(csv(o.optString("tag"))).append(',')
                     sb.append(csv(o.optString("text"))).append('\n')
                 }
