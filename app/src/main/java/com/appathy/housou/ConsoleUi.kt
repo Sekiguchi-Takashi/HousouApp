@@ -2041,6 +2041,42 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                 11f, Ui.SUB
             ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
         )
+
+        // VPN状態
+        val vpnIp = Vpn.vpnIp()
+        val vpnApps = Vpn.installed(act)
+        c.addView(Ui.sep(act), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        c.addView(Ui.tv(act, "🔐 VPN連携", 14f, Ui.FG, true), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        if (vpnIp != null) {
+            c.addView(
+                Ui.tv(act, "VPN接続中。端末側にはこのアドレスを設定してください:", 11f, Ui.SUB),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+            )
+            c.addView(Ui.tv(act, "$vpnIp:${Proto.PORT_REG}", 15f, Ui.GREEN, true), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+            c.addView(
+                Ui.tv(
+                    act,
+                    "コンソールをモバイル回線（4G/5G）で運用する場合も、全端末が同じVPNに入っていれば放送・通話とも届きます。音が途切れる場合は音質を8kHzに落としてください。",
+                    10f, Ui.SUB
+                ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+            )
+        } else if (vpnApps.isNotEmpty()) {
+            c.addView(
+                Ui.tv(act, vpnApps.joinToString("・") { it.name } + " が入っていますが、未接続です。", 11f, Ui.SUB),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+            )
+            c.addView(Ui.ghost(act, "VPNアプリを開く", Ui.CYAN) {
+                Vpn.launch(act, vpnApps[0])
+            }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        } else {
+            c.addView(
+                Ui.tv(
+                    act,
+                    "VPNアプリは見つかりませんでした。別ネットワークの端末と繋ぐ場合は、全端末に Tailscale 等を導入してください（このアプリはVPNを内蔵しません）。",
+                    11f, Ui.SUB
+                ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+            )
+        }
         return c
     }
 

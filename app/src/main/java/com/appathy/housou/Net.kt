@@ -58,11 +58,11 @@ object Net {
     }
 
     /** 端末へ制御コマンドを1往復。失敗時はnull */
-    fun ctrl(ip: String, req: JSONObject, timeoutMs: Int = 2500): JSONObject? {
+    fun ctrl(ip: String, req: JSONObject, timeoutMs: Int = 2500, port: Int = Proto.PORT_CTRL): JSONObject? {
         var sk: Socket? = null
         try {
             sk = Socket()
-            sk.connect(InetSocketAddress(ip, Proto.PORT_CTRL), timeoutMs)
+            sk.connect(InetSocketAddress(ip, port), timeoutMs)
             sk.soTimeout = timeoutMs
             val w = OutputStreamWriter(sk.getOutputStream(), "UTF-8")
             w.write(req.toString())

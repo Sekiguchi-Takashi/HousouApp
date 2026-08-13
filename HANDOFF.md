@@ -1,7 +1,7 @@
 # HANDOFF — HousouApp（放送室）
 
 ## 現況
-v1.7 / versionCode 11。Kotlin、UIは全てコード生成（XMLレイアウトなし）。
+v1.7.1 / versionCode 12。Kotlin、UIは全てコード生成（XMLレイアウトなし）。
 1APK 2ロール（console / terminal）。`Store.mode` で分岐し `MainActivity.route()` が画面を決める。
 
 ## ファイル構成
@@ -87,6 +87,11 @@ v1.7 / versionCode 11。Kotlin、UIは全てコード生成（XMLレイアウト
 - **予告カウントダウンは端末側の noticeUntil（絶対時刻）で描画**。コンソールは満了をタイマーで待って tts を送るだけ。端末とコンソールで独立して動くため、途中でコンソールが落ちてもカウントダウンは自然に消える。
 - **SLAは日報から積む**。Trend の生データは12時間で消えるため、日報の n / ok / avail が日次スナップショットとして唯一の長期記録。日報の JSON 構造（n, ok, avail[]）を変えるときは sla() も必ず追随する。
 - **翻訳はしない**。第2言語の文はユーザー入力。放送内容の正確性をアプリが担わない線引き。
+
+## v1.7.1 の追加
+
+- `Vpn.kt` — VPN連携支援。**VPNスタックは内蔵しない**方針（依存と鍵管理を負わない）。検出・起動・アドレス表示・疎通テストのみ。`Net.ctrl()` に port 引数を追加（疎通テストが PORT_REG を叩くため）。
+- 疎通テストは PORT_REG へ ping を1往復。regServer は id 無しの JSON を受けても upsert せず {"ok":true} を返すので、副作用なしのプローブとして安全。
 
 ## 署名（v1.6.1〜）
 

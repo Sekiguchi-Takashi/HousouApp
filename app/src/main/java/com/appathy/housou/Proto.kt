@@ -22,7 +22,7 @@ object Proto {
     const val RATE_HIGH = 16000
     const val RATE_LOW = 8000
 
-    const val APP_VER = "1.7"
+    const val APP_VER = "1.7.1"
 
     /** この時間、アナウンス/応答が無ければオフライン扱い */
     const val OFFLINE_MS = 14000L

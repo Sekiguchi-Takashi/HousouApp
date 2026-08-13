@@ -484,6 +484,39 @@ class TerminalUi(private val act: MainActivity, private val store: Store) {
             ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
         )
 
+        // VPN連携
+        val vpnIp = Vpn.vpnIp()
+        val vpnApps = Vpn.installed(act)
+        val vpnStatus = when {
+            vpnIp != null -> "接続中（この端末のVPNアドレス: $vpnIp）"
+            vpnApps.isNotEmpty() -> vpnApps.joinToString("・") { it.name } + " が入っていますが未接続です"
+            else -> "VPNアプリが見つかりません（遠隔運用には Tailscale 等を入れてください）"
+        }
+        box.addView(
+            Ui.tv(act, "VPN: $vpnStatus", 10f, if (vpnIp != null) Ui.GREEN else Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8))
+        )
+        if (vpnApps.isNotEmpty() && vpnIp == null) {
+            box.addView(Ui.ghost(act, "VPNアプリを開く", Ui.CYAN) {
+                Vpn.launch(act, vpnApps[0])
+            }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        }
+        box.addView(Ui.ghost(act, "🔎 コンソールへの疎通テスト", Ui.ACC) {
+            val h = host.text.toString().trim()
+            if (h.isEmpty()) {
+                act.toast("コンソールのアドレスを入力してください")
+            } else {
+                act.toast("テスト中…")
+                Thread {
+                    val hh = h.substringBefore(":")
+                    val (ok, msg) = Vpn.probe(hh, Proto.PORT_REG)
+                    act.runOnUiThread {
+                        act.toast(if (ok) "到達できます（$msg）" else msg)
+                    }
+                }.start()
+            }
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
         box.addView(Ui.ghost(act, "この端末を管理コンソールに切替", Ui.ACC) {
             act.switchMode()
         }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 16)))
