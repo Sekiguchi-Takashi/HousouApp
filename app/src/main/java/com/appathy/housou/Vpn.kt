@@ -52,7 +52,7 @@ object Vpn {
 
     /**
      * VPNインターフェースのIPv4アドレス。
-     * インターフェース名（tun*/wg*/tailscale*/utun*）と、
+     * インターフェース名（tun・wg・tailscale・utun で始まるもの）と、
      * TailscaleのCGNAT帯（100.64.0.0/10）の両方で判定する。
      */
     fun vpnIp(): String? {
