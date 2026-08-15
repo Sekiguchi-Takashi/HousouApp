@@ -252,10 +252,17 @@ UDPブロードキャストはルータを越えないため、別サブネッ�
 - 稼働率は5分間隔の観測サンプルに基づく概算
 - 未実装: SIP/IP電話連携（専用スタックが要り、実装量のわりに得るものが少ないため見送り）
 
-## ビルド
+## ビルド・配布
 
-push すると GitHub Actions が debug APK を生成する。
-Actions → 最新run → Artifacts → `HousouApp-debug-apk`
+`deploy.sh` を実行すると、push → タグ発行までが1コマンドで完結する。
+タグ発行により release ワークフローがビルドして Release を作り、自作アプリストアに更新として現れる。
+
+```
+bash deploy.sh "変更内容"
+```
+
+`build.yml` はコンパイルが通るかの検証のみで、APKの成果物保存は行わない
+（Artifacts の無料枠を消費しないため）。APKは Release から取得する。
 
 ### 署名について
 

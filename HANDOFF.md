@@ -93,6 +93,12 @@ v1.7.1 / versionCode 12。Kotlin、UIは全てコード生成（XMLレイアウ�
 - `Vpn.kt` — VPN連携支援。**VPNスタックは内蔵しない**方針（依存と鍵管理を負わない）。検出・起動・アドレス表示・疎通テストのみ。`Net.ctrl()` に port 引数を追加（疎通テストが PORT_REG を叩くため）。
 - 疎通テストは PORT_REG へ ping を1往復。regServer は id 無しの JSON を受けても upsert せず {"ok":true} を返すので、副作用なしのプローブとして安全。
 
+## CI / 配布
+
+- `deploy.sh` は恒久ルール準拠（pull --rebase → push → 直近リリースから次パッチ版を算出してタグ発行）。
+- `.github/workflows/release.yml` と `ci/appathy.keystore` はカタログ管理システムが API 経由で直接コミットする。**削除しないこと**。pull --rebase が無いと push が rejected になる。
+- `build.yml` は検証専用。**upload-artifact は入れない**（Artifacts 無料枠 0.5GB が枯渇して "Artifact storage quota has been hit" でビルドが落ちるため）。APK は Release 経由で配布する。
+
 ## 署名（v1.6.1〜）
 
 - `keystore/housou.keystore`（alias: housou、pass: housou2026）で debug/release とも署名。ビルド間で署名が固定され、上書き更新が可能。
