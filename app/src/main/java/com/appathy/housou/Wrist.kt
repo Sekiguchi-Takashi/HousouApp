@@ -47,7 +47,9 @@ object Wrist {
         val token: String,
         val group: String,
         val lastSeen: Long,
-        val displayHint: String
+        val displayHint: String,
+        /** この端末は管理者スマホ自身が中継する（同一端末内で完結） */
+        val self: Boolean = false
     )
 
     fun devices(store: Store): List<WDev> {
@@ -61,7 +63,7 @@ object Wrist {
                 WDev(
                     o.optString("id"), o.optString("name"), o.optString("token"),
                     o.optString("group", "既定"), o.optLong("seen"),
-                    o.optString("hint", "ascii")
+                    o.optString("hint", "ascii"), o.optBoolean("self", false)
                 )
             )
         }
@@ -70,13 +72,16 @@ object Wrist {
 
     fun find(store: Store, id: String): WDev? = devices(store).firstOrNull { it.id == id }
 
+    /** 管理者スマホ自身が中継する端末（1台まで） */
+    fun selfDevice(store: Store): WDev? = devices(store).firstOrNull { it.self }
+
     fun auth(store: Store, id: String, token: String): Boolean {
         val d = find(store, id) ?: return false
         return d.token.isNotEmpty() && d.token == token
     }
 
     /** 新規登録。device_id と token を採番して返す */
-    fun register(store: Store, name: String, group: String): WDev {
+    fun register(store: Store, name: String, group: String, self: Boolean = false): WDev {
         val id = "w-" + UUID.randomUUID().toString().replace("-", "").substring(0, 6)
         val token = UUID.randomUUID().toString().replace("-", "").substring(0, 16)
         val a = store.wristDevices()
@@ -87,9 +92,10 @@ object Wrist {
         o.put("group", group)
         o.put("seen", 0L)
         o.put("hint", "ascii")
+        o.put("self", self)
         a.put(o)
         store.saveWristDevices(a)
-        return WDev(id, name, token, group, 0L, "ascii")
+        return WDev(id, name, token, group, 0L, "ascii", self)
     }
 
     fun reissue(store: Store, id: String): String {
@@ -144,6 +150,14 @@ object Wrist {
     /** QRペイロード（既存の端末QRとは別スキーム） */
     fun qrPayload(d: WDev, host: String): String =
         "housou://wrist?host=$host&port=${Proto.PORT_WRIST}&dev=${d.id}&token=${d.token}"
+
+    /**
+     * 管理者スマホ自身が中継する場合の接続先。
+     * 同一端末内のループバックへ繋ぐため、Wi-Fiが切れていても、
+     * IPが変わっても設定を直す必要がない。
+     */
+    fun selfPayload(d: WDev): String =
+        "housou://wrist?host=127.0.0.1&port=${Proto.PORT_WRIST}&dev=${d.id}&token=${d.token}"
 
     // ============================================================ キュー
     /** device_id ごとのキュー。JSON: { "<dev>": [ item, ... ] } */

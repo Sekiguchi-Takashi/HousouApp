@@ -2006,6 +2006,15 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
         head.addView(Ui.tv(act, "⌚ 手首端末", 16f, Ui.FG, true), LinearLayout.LayoutParams(0, Ui.WC, 1f))
         head.addView(Ui.ghost(act, "＋ 登録", Ui.ACC) { addWristDevice() })
         c3.addView(head)
+        c3.addView(
+            Ui.tv(
+                act,
+                "他の人の時計は「＋ 登録」でQRを配ります。自分の時計を使う場合は下の「この端末で使う」を押してください。",
+                11f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
+        val selfRow = Ui.col(act)
+        c3.addView(selfRow, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
         val list = Ui.col(act)
         c3.addView(list, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
         l.addView(c3, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
@@ -2013,11 +2022,38 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
 
         refreshers.add {
             tgt.text = wristTargetLabel()
+
+            selfRow.removeAllViews()
+            val me = Wrist.selfDevice(store)
+            if (me == null) {
+                selfRow.addView(Ui.btn(act, "⌚ この端末で使う（自分のPebble）") { setupSelf() })
+            } else {
+                val ok = me.lastSeen > 0
+                selfRow.addView(
+                    Ui.tv(act, "⌚ この端末: ${me.name}", 14f, if (ok) Ui.GREEN else Ui.ACC, true)
+                )
+                selfRow.addView(
+                    Ui.tv(
+                        act,
+                        if (ok) "時計アプリと接続済み（最終通信 ${ago(me.lastSeen)}）"
+                        else "時計アプリの設定がまだです。「接続情報」から設定してください。",
+                        11f, Ui.SUB
+                    ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+                )
+                val sops = Ui.row(act)
+                sops.addView(Ui.ghost(act, "接続情報", Ui.CYAN) { showSelfInfo(me) }, cw())
+                sops.addView(Ui.ghost(act, "自分に送信", Ui.FG) {
+                    wristTarget = me.id
+                    render()
+                }, cw())
+                selfRow.addView(sops, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+            }
+
             list.removeAllViews()
-            val ds = Wrist.devices(store)
+            val ds = Wrist.devices(store).filter { !it.self }
             if (ds.isEmpty()) {
                 list.addView(
-                    Ui.tv(act, "登録された手首端末はありません。「＋ 登録」から追加してください。", 12f, Ui.SUB)
+                    Ui.tv(act, "他の人の手首端末はまだありません。", 12f, Ui.SUB)
                 )
             }
             for (d in ds) {
@@ -2310,6 +2346,94 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                     showWristQr(d)
                 }
             }.show()
+    }
+
+    /**
+     * 管理者スマホ自身のPebbleを使う設定。
+     * 中継も同じ端末で行うため、接続先は 127.0.0.1 になる。
+     * Wi-Fiが切れてもIPが変わっても設定を直す必要がない。
+     */
+    private fun setupSelf() {
+        val box = Ui.col(act, 8)
+        box.addView(
+            Ui.tv(
+                act,
+                "この端末（管理者スマホ）に繋がっているPebbleを、手首端末として使えるようにします。" +
+                        "他のスマホは要りません。",
+                12f, Ui.FG
+            )
+        )
+        val nm = Ui.edit(act, "表示名", "自分")
+        box.addView(Ui.tv(act, "表示名", 12f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        box.addView(nm, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(
+            Ui.tv(
+                act,
+                "登録後、この端末のPebbleアプリで時計アプリ（放送室ウォッチ）の設定を開き、" +
+                        "表示される接続情報を入力してください。接続先は 127.0.0.1 固定です。",
+                10f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12))
+        )
+        AlertDialog.Builder(act).setTitle("この端末で使う")
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("やめる", null)
+            .setPositiveButton("登録") { _, _ ->
+                val n = nm.text.toString().trim().ifBlank { "自分" }
+                val d = Wrist.register(store, n, "管理者", true)
+                store.log("wrist", "自分の手首端末を登録: ${d.name}")
+                render()
+                showSelfInfo(d)
+            }.show()
+    }
+
+    private fun showSelfInfo(d: Wrist.WDev) {
+        val box = Ui.col(act, 12)
+        box.addView(
+            Ui.tv(
+                act,
+                "この端末のPebbleアプリ →「放送室ウォッチ」の歯車 → 設定画面に、以下を入力してください。",
+                12f, Ui.FG
+            )
+        )
+        box.addView(Ui.tv(act, "接続先", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14)))
+        box.addView(Ui.tv(act, "127.0.0.1", 16f, Ui.ACC, true))
+        box.addView(Ui.tv(act, "ポート", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        box.addView(Ui.tv(act, "${Proto.PORT_WRIST}", 16f, Ui.ACC, true))
+        box.addView(Ui.tv(act, "端末ID", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        box.addView(Ui.tv(act, d.id, 16f, Ui.ACC, true))
+        box.addView(Ui.tv(act, "トークン", 11f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        box.addView(Ui.tv(act, d.token, 15f, Ui.ACC, true))
+        box.addView(
+            Ui.tv(
+                act,
+                "127.0.0.1 は「この端末自身」を指します。同じ端末の中で完結するため、" +
+                        "Wi-Fiが切れても、IPアドレスが変わっても設定を直す必要はありません。",
+                10f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 16))
+        )
+        box.addView(Ui.ghost(act, "🔑 トークンを再発行", Ui.SUB) {
+            Wrist.reissue(store, d.id)
+            store.log("security", "自分の手首端末のトークンを再発行")
+            act.toast("再発行しました。時計側の設定を入れ直してください")
+            render()
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 16)))
+        box.addView(Ui.ghost(act, "この端末での利用をやめる", Ui.RED) {
+            Wrist.remove(store, d.id)
+            store.log("wrist", "自分の手首端末を解除")
+            act.toast("解除しました")
+            render()
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+
+        AlertDialog.Builder(act).setTitle("${d.name} の接続情報")
+            .setView(Ui.scroll(act, box))
+            .setPositiveButton("閉じる", null)
+            .setNeutralButton("共有") { _, _ ->
+                shareText(
+                    "放送室ウォッチ 接続情報\n接続先: 127.0.0.1\nポート: ${Proto.PORT_WRIST}\n端末ID: ${d.id}\nトークン: ${d.token}",
+                    "放送室ウォッチ 接続情報"
+                )
+            }
+            .show()
     }
 
     private fun showWristQr(d: Wrist.WDev) {
