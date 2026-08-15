@@ -102,6 +102,7 @@ class ConsoleService : Service() {
     private var disasterTh: Thread? = null
     private var trigger: java.net.ServerSocket? = null
     private var regServer: java.net.ServerSocket? = null
+    private var wrist: WristServer? = null
     private var lastReport = ""
     private var lastSignal = ""
     private var mcLock: WifiManager.MulticastLock? = null
@@ -123,6 +124,8 @@ class ConsoleService : Service() {
         startScheduler()
         startTrigger()
         startRegServer()
+        wrist = WristServer(store) { push() }
+        wrist?.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -599,6 +602,7 @@ class ConsoleService : Service() {
         stopDisaster()
         try { trigger?.close() } catch (e: Exception) { }
         try { regServer?.close() } catch (e: Exception) { }
+        try { wrist?.stop() } catch (e: Exception) { }
         stopTx()
         stopCallRx()
         try { mcLock?.release() } catch (e: Exception) { }

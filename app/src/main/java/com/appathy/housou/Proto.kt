@@ -19,10 +19,13 @@ object Proto {
     /** コンソールの遠隔端末登録受付（TCP・別サブネット/VPN用） */
     const val PORT_REG = 45305
 
+    /** 手首端末（Pebble）連携のHTTPサーバ */
+    const val PORT_WRIST = 45306
+
     const val RATE_HIGH = 16000
     const val RATE_LOW = 8000
 
-    const val APP_VER = "1.7.4"
+    const val APP_VER = "1.8"
 
     /** この時間、アナウンス/応答が無ければオフライン扱い */
     const val OFFLINE_MS = 14000L

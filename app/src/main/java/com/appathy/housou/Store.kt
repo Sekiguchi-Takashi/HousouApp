@@ -90,6 +90,18 @@ class Store(ctx: Context) {
         get() = s("ts_target", "all")
         set(v) = put("ts_target", v)
 
+    // ---------- 手首端末連携 ----------
+    fun wristDevices(): JSONArray = arr("wrist_dev")
+    fun saveWristDevices(a: JSONArray) = put("wrist_dev", a.toString())
+
+    var wristPollSec: Int
+        get() = p.getInt("wrist_poll", 20)
+        set(v) = p.edit().putInt("wrist_poll", v).apply()
+
+    var wristTtlMin: Int
+        get() = p.getInt("wrist_ttl", 60)
+        set(v) = p.edit().putInt("wrist_ttl", v).apply()
+
     /** キオスクモード（画面ピン留め＋設定PIN必須） */
     var kioskEnabled: Boolean
         get() = p.getBoolean("kiosk", false)

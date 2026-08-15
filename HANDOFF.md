@@ -1,7 +1,7 @@
 # HANDOFF — HousouApp（放送室）
 
 ## 現況
-v1.7.1 / versionCode 12。Kotlin、UIは全てコード生成（XMLレイアウトなし）。
+v1.8 / versionCode 16。Kotlin、UIは全てコード生成（XMLレイアウトなし）。
 1APK 2ロール（console / terminal）。`Store.mode` で分岐し `MainActivity.route()` が画面を決める。
 
 ## ファイル構成
@@ -24,6 +24,8 @@ v1.7.1 / versionCode 12。Kotlin、UIは全てコード生成（XMLレイアウ�
 | `Routing.kt` | 音声出力先の列挙・選択（内蔵/有線/BT/USB） |
 | `Report.kt` | 日報の集計と保存（直近30日）、月次SLA積算 |
 | `Lang.kt` | 多言語放送の言語定義（8言語） |
+| `Wrist.kt` | 手首端末のデータ層（登録・トークン・キュー・回答・ASCII辞書） |
+| `WristServer.kt` | 手首連携HTTPサーバ（45306） |
 | `Diag.kt` | AI推論ルール（スコア、アラート、障害推定、帯域推奨） |
 | `Assistant.kt` | 日本語自然言語→操作意図のローカル写像 |
 | `TerminalService.kt` | 子機常駐（アナウンス・制御サーバ・受話・TTS） |
@@ -92,6 +94,16 @@ v1.7.1 / versionCode 12。Kotlin、UIは全てコード生成（XMLレイアウ�
 
 - `Vpn.kt` — VPN連携支援。**VPNスタックは内蔵しない**方針（依存と鍵管理を負わない）。検出・起動・アドレス表示・疎通テストのみ。`Net.ctrl()` に port 引数を追加（疎通テストが PORT_REG を叩くため）。
 - 疎通テストは PORT_REG へ ping を1往復。regServer は id 無しの JSON を受けても upsert せず {"ok":true} を返すので、副作用なしのプローブとして安全。
+
+## v1.8 で追加した約束（手首連携）
+
+- **契約は `HOUSOU_WRIST_API v0.3`**。Pebble側チャットと共有。放送室チャットが契約オーナーで、変更は放送室側から通知する。勝手にレスポンス形式を変えない。
+- **ラベルは親機で確定**。`label_ja` / `label_ascii` の両方が揃わない項目は `Wrist.enqueue()` が弾く。切り詰めも親機で行う（時計側の防御には頼らない）。
+- **`seq` は device_id ごとの名前空間**。キューは `{"<dev>": [items]}` 構造で、端末ごとに独立採番。
+- **ack は冪等、answer は上書き**。ackの2回目以降は無視して ok を返す。answerは期限切れなら `{"ok":false,"reason":"expired"}`。
+- **45304（災害トリガー）に相乗りさせない**。あちらはPIN一致だけで全館放送が撃てる強権限のため、日常トラフィックと混ぜない。
+- **手首の対象は既存の対象選択と別体系**。手首は人が着けるものでフロアや建物と結びつかない。全員 / 手首グループ / 個別のみ。
+- **日報とSLAには載せない**。日報は放送実績と設備健全性の文書、SLAは設備稼働率。手首の応答率は別の指標。
 
 ## CI / 配布
 

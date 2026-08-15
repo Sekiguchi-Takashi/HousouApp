@@ -41,8 +41,8 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
 
     private val refreshers = ArrayList<() -> Unit>()
 
-    private val tabNames = arrayOf("状況", "放送", "通話", "端末", "音源", "予約", "ログ", "設定")
-    private val tabIcons = arrayOf("📊", "📢", "🎙", "📱", "🎵", "⏰", "📜", "⚙")
+    private val tabNames = arrayOf("状況", "放送", "通話", "端末", "音源", "予約", "手首", "ログ", "設定")
+    private val tabIcons = arrayOf("📊", "📢", "🎙", "📱", "🎵", "⏰", "⌚", "📜", "⚙")
 
     // ------------------------------------------------------------ 基盤
     fun attach(container: FrameLayout) {
@@ -196,7 +196,8 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             3 -> tabDevices()
             4 -> tabLibrary()
             5 -> tabSchedule()
-            6 -> tabLog()
+            6 -> tabWrist()
+            7 -> tabLog()
             else -> tabSettings()
         }
         content.removeAllViews()
@@ -458,7 +459,7 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             Assistant.A_BROADCAST -> { tab = 1; render() }
             Assistant.A_CALL -> { tab = 2; render() }
             Assistant.A_DEVICES -> { tab = 3; render() }
-            Assistant.A_LOG -> { tab = 6; render() }
+            Assistant.A_LOG -> { tab = 7; render() }
             Assistant.A_CHIME -> sendChime(targetSpec, false)
             Assistant.A_EMERGENCY -> {
                 if (r.text.isNotEmpty()) sendTts(targetSpec, r.text, true)
@@ -1948,6 +1949,473 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
     // ============================================================ 5 ログ
     private var logFilterToday = false
 
+
+    // ============================================================ 6 手首端末
+    private var wristTarget = "all"
+
+    private fun tabWrist(): View {
+        val l = Ui.col(act, 14)
+
+        // 送信先
+        val c0 = Ui.card(act, Ui.CARD2)
+        c0.addView(Ui.tv(act, "⌚ 送信先", 16f, Ui.ACC, true))
+        val tgt = Ui.tv(act, "", 14f, Ui.FG, true)
+        c0.addView(tgt, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        val tr = Ui.row(act)
+        tr.addView(chip("全員") { wristTarget = "all"; render() }, cw())
+        tr.addView(chip("グループ") { pickWristGroup() }, cw())
+        tr.addView(chip("個別") { pickWristDevice() }, cw())
+        c0.addView(tr, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        l.addView(c0)
+
+        // メッセージ
+        val c1 = Ui.card(act)
+        c1.addView(Ui.tv(act, "💬 短文メッセージ", 16f, Ui.FG, true))
+        c1.addView(
+            Ui.tv(act, "手首が振動し、本文が表示されます。既読が戻ります。", 11f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
+        for (m in Wrist.messages) {
+            c1.addView(Ui.ghost(act, m.ja, Ui.FG) {
+                sendWristMessage(m.ja, m.ascii, false)
+            }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        }
+        c1.addView(Ui.ghost(act, "✏ 自由入力で送る", Ui.CYAN) { freeMessageDialog() },
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        l.addView(c1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        // アンケート
+        val c2 = Ui.card(act)
+        c2.addView(Ui.tv(act, "❓ 選択式アンケート", 16f, Ui.FG, true))
+        c2.addView(
+            Ui.tv(act, "最大3択。相手はボタンで選ぶだけで回答できます。", 11f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
+        for (t in Wrist.templates) {
+            val name = if (t.ja.isEmpty()) "${t.key}（質問を入力）" else t.ja
+            c2.addView(Ui.ghost(act, name, Ui.FG) { templateDialog(t) },
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        }
+        c2.addView(Ui.ghost(act, "✏ 一から作る", Ui.CYAN) { questionDialog(null) },
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        l.addView(c2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        // 端末一覧
+        val c3 = Ui.card(act)
+        val head = Ui.row(act)
+        head.addView(Ui.tv(act, "⌚ 手首端末", 16f, Ui.FG, true), LinearLayout.LayoutParams(0, Ui.WC, 1f))
+        head.addView(Ui.ghost(act, "＋ 登録", Ui.ACC) { addWristDevice() })
+        c3.addView(head)
+        val list = Ui.col(act)
+        c3.addView(list, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+        l.addView(c3, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+        l.addView(Ui.space(act, 20))
+
+        refreshers.add {
+            tgt.text = wristTargetLabel()
+            list.removeAllViews()
+            val ds = Wrist.devices(store)
+            if (ds.isEmpty()) {
+                list.addView(
+                    Ui.tv(act, "登録された手首端末はありません。「＋ 登録」から追加してください。", 12f, Ui.SUB)
+                )
+            }
+            for (d in ds) {
+                val row = Ui.col(act)
+                row.setPadding(0, Ui.dp(act, 8), 0, Ui.dp(act, 8))
+                val seen = if (d.lastSeen == 0L) "未接続" else "最終通信 " + ago(d.lastSeen)
+                row.addView(Ui.tv(act, d.name, 14f, Ui.FG, true))
+                row.addView(Ui.tv(act, "${d.group} / ${d.id} / $seen", 11f, Ui.SUB))
+
+                // 直近のやりとり
+                val its = Wrist.items(store, d.id)
+                if (its.isNotEmpty()) {
+                    val o = its[0]
+                    val st = when {
+                        o.has("answer") -> "回答: " + Wrist.choiceLabel(o, o.optInt("answer"))
+                        o.has("acked_at") -> "既読"
+                        else -> "未読"
+                    }
+                    row.addView(
+                        Ui.tv(act, "最新「${o.optString("label_ja")}」— $st", 11f,
+                            if (o.has("answer") || o.has("acked_at")) Ui.GREEN else Ui.SUB),
+                        Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+                    )
+                }
+
+                val ops = Ui.row(act)
+                ops.addView(Ui.ghost(act, "履歴", Ui.FG) { wristHistory(d) }, cw())
+                ops.addView(Ui.ghost(act, "QR", Ui.ACC) { showWristQr(d) }, cw())
+                ops.addView(Ui.ghost(act, "設定", Ui.SUB) { wristDeviceDialog(d) }, cw())
+                row.addView(ops, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+                row.addView(Ui.sep(act))
+                list.addView(row)
+            }
+        }
+        return Ui.scroll(act, l)
+    }
+
+    private fun ago(t: Long): String {
+        val d = (System.currentTimeMillis() - t) / 1000
+        return when {
+            d < 60 -> "${d}秒前"
+            d < 3600 -> "${d / 60}分前"
+            d < 86400 -> "${d / 3600}時間前"
+            else -> "${d / 86400}日前"
+        }
+    }
+
+    private fun wristTargetLabel(): String {
+        val ds = Wrist.devices(store)
+        return when {
+            wristTarget == "all" -> "全員（${ds.size}台）"
+            wristTarget.startsWith("g:") -> {
+                val g = wristTarget.substring(2)
+                "$g（${ds.count { it.group == g }}台）"
+            }
+            else -> Wrist.find(store, wristTarget)?.name ?: "未選択"
+        }
+    }
+
+    private fun wristTargets(): List<String> {
+        val ds = Wrist.devices(store)
+        return when {
+            wristTarget == "all" -> ds.map { it.id }
+            wristTarget.startsWith("g:") -> {
+                val g = wristTarget.substring(2)
+                ds.filter { it.group == g }.map { it.id }
+            }
+            else -> ds.filter { it.id == wristTarget }.map { it.id }
+        }
+    }
+
+    private fun pickWristGroup() {
+        val gs = Wrist.groups(store)
+        if (gs.isEmpty()) {
+            act.toast("端末が登録されていません")
+            return
+        }
+        AlertDialog.Builder(act).setTitle("グループを選択")
+            .setItems(gs.toTypedArray()) { _, i ->
+                wristTarget = "g:" + gs[i]
+                render()
+            }.show()
+    }
+
+    private fun pickWristDevice() {
+        val ds = Wrist.devices(store)
+        if (ds.isEmpty()) {
+            act.toast("端末が登録されていません")
+            return
+        }
+        AlertDialog.Builder(act).setTitle("端末を選択")
+            .setItems(ds.map { it.name }.toTypedArray()) { _, i ->
+                wristTarget = ds[i].id
+                render()
+            }.show()
+    }
+
+    // ---------------------------------------------------------- 送信
+    private fun sendWristMessage(ja: String, ascii: String, urgent: Boolean) {
+        val ids = wristTargets()
+        if (ids.isEmpty()) {
+            act.toast("送信先の端末がありません")
+            return
+        }
+        val item = Wrist.buildMessage(ja, ascii, urgent, store.wristTtlMin)
+        val n = Wrist.enqueue(store, ids, item)
+        if (n == 0) {
+            act.toast("ラベルが不足しているため送信できません")
+            return
+        }
+        act.toast("$n 台へ送信しました")
+        store.log("wrist", "メッセージ送信「$ja」→ ${wristTargetLabel()}")
+        render()
+    }
+
+    private fun freeMessageDialog() {
+        val box = Ui.col(act, 8)
+        val ja = Ui.edit(act, "日本語（最大${Wrist.LIMIT_JA_BODY}文字）")
+        val cnt = Ui.tv(act, "残り ${Wrist.LIMIT_JA_BODY} 文字", 11f, Ui.SUB)
+        val asc = Ui.edit(act, "ASCII（最大${Wrist.LIMIT_ASCII_BODY}文字）")
+        ja.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val n = Wrist.LIMIT_JA_BODY - (s?.length ?: 0)
+                cnt.text = if (n >= 0) "残り $n 文字" else "${-n} 文字超過（切り詰められます）"
+                cnt.setTextColor(if (n >= 0) Ui.SUB else Ui.RED)
+                if (asc.text.isEmpty()) {
+                    val sg = Wrist.suggest(s?.toString() ?: "")
+                    if (sg.isNotEmpty()) asc.setHint(sg)
+                }
+            }
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) { }
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) { }
+        })
+        box.addView(Ui.tv(act, "本文", 12f, Ui.SUB))
+        box.addView(ja, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(cnt, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(
+            Ui.tv(act, "ASCII表記（言語パック未導入の時計はこちらが表示されます。必須）", 12f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12))
+        )
+        box.addView(asc, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+
+        AlertDialog.Builder(act).setTitle("メッセージを作る")
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("やめる", null)
+            .setPositiveButton("送信") { _, _ ->
+                val j = ja.text.toString().trim()
+                var a = asc.text.toString().trim()
+                if (a.isEmpty()) a = Wrist.suggest(j)
+                if (j.isEmpty() || a.isEmpty()) {
+                    act.toast("日本語とASCIIの両方が必要です")
+                } else {
+                    sendWristMessage(j, a, false)
+                }
+            }.show()
+    }
+
+    private fun templateDialog(t: Wrist.Template) {
+        if (t.ja.isEmpty() || t.choices.any { it.first.isEmpty() }) {
+            questionDialog(t)
+        } else {
+            sendWristQuestion(t.ja, t.ascii, t.choices)
+        }
+    }
+
+    /** 質問と3択を組み立てる。テンプレを渡すと初期値に入る */
+    private fun questionDialog(t: Wrist.Template?) {
+        val box = Ui.col(act, 8)
+        val qja = Ui.edit(act, "質問（最大${Wrist.LIMIT_JA_BODY}文字）", t?.ja ?: "")
+        val qas = Ui.edit(act, "質問のASCII", t?.ascii ?: "")
+        val qcnt = Ui.tv(act, "", 11f, Ui.SUB)
+        watch(qja, qcnt, Wrist.LIMIT_JA_BODY, qas)
+
+        box.addView(Ui.tv(act, "質問", 12f, Ui.SUB))
+        box.addView(qja, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(qcnt, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(qas, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+
+        box.addView(
+            Ui.tv(act, "選択肢（最大3つ・日本語${Wrist.LIMIT_JA_CHOICE}文字まで）", 12f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14))
+        )
+        val cja = ArrayList<android.widget.EditText>()
+        val cas = ArrayList<android.widget.EditText>()
+        var i = 0
+        while (i < 3) {
+            val pre = t?.choices?.getOrNull(i)
+            val e1 = Ui.edit(act, "選択肢${i + 1}", pre?.first ?: "")
+            val e2 = Ui.edit(act, "ASCII", pre?.second ?: "")
+            val cc = Ui.tv(act, "", 11f, Ui.SUB)
+            watch(e1, cc, Wrist.LIMIT_JA_CHOICE, e2)
+            box.addView(e1, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8)))
+            box.addView(cc, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 2)))
+            box.addView(e2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+            cja.add(e1); cas.add(e2)
+            i++
+        }
+        box.addView(
+            Ui.tv(act, "空欄の選択肢は送られません。ASCIIは未入力なら候補が自動で入ります。", 10f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10))
+        )
+
+        AlertDialog.Builder(act).setTitle("アンケートを作る")
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("やめる", null)
+            .setPositiveButton("送信") { _, _ ->
+                val j = qja.text.toString().trim()
+                var a = qas.text.toString().trim()
+                if (a.isEmpty()) a = Wrist.suggest(j)
+                val cs = ArrayList<Pair<String, String>>()
+                var k = 0
+                while (k < 3) {
+                    val x = cja[k].text.toString().trim()
+                    var y = cas[k].text.toString().trim()
+                    if (y.isEmpty()) y = Wrist.suggest(x)
+                    if (x.isNotEmpty() && y.isNotEmpty()) cs.add(Pair(x, y))
+                    k++
+                }
+                when {
+                    j.isEmpty() || a.isEmpty() -> act.toast("質問の日本語とASCIIが必要です")
+                    cs.isEmpty() -> act.toast("選択肢を1つ以上入力してください")
+                    else -> sendWristQuestion(j, a, cs)
+                }
+            }.show()
+    }
+
+    /** 入力に応じて残り文字数を出し、ASCII欄に候補をヒント表示する */
+    private fun watch(
+        src: android.widget.EditText,
+        label: TextView,
+        limit: Int,
+        ascii: android.widget.EditText
+    ) {
+        val upd = {
+            val n = limit - src.text.length
+            label.text = if (n >= 0) "残り $n 文字" else "${-n} 文字超過（切り詰められます）"
+            label.setTextColor(if (n >= 0) Ui.SUB else Ui.RED)
+            val sg = Wrist.suggest(src.text.toString())
+            if (sg.isNotEmpty() && ascii.text.isEmpty()) ascii.hint = sg
+        }
+        upd()
+        src.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(s: android.text.Editable?) { upd() }
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) { }
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) { }
+        })
+    }
+
+    private fun sendWristQuestion(ja: String, ascii: String, choices: List<Pair<String, String>>) {
+        val ids = wristTargets()
+        if (ids.isEmpty()) {
+            act.toast("送信先の端末がありません")
+            return
+        }
+        val item = Wrist.buildQuestion(ja, ascii, choices, store.wristTtlMin)
+        val n = Wrist.enqueue(store, ids, item)
+        if (n == 0) {
+            act.toast("ラベルが不足しているため送信できません")
+            return
+        }
+        act.toast("$n 台へ送信しました")
+        store.log("wrist", "アンケート送信「$ja」→ ${wristTargetLabel()}")
+        render()
+    }
+
+    // ---------------------------------------------------------- 端末管理
+    private fun addWristDevice() {
+        val box = Ui.col(act, 8)
+        val nm = Ui.edit(act, "装着者名（例: 田中）")
+        val gp = Ui.edit(act, "グループ（例: 厨房班）", "既定")
+        box.addView(Ui.tv(act, "装着者名", 12f, Ui.SUB))
+        box.addView(nm, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(Ui.tv(act, "グループ", 12f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        box.addView(gp, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(
+            Ui.tv(act, "登録するとQRコードが表示されます。装着者のスマホで読み取って設定します。", 10f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10))
+        )
+        AlertDialog.Builder(act).setTitle("手首端末を登録")
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("やめる", null)
+            .setPositiveButton("登録") { _, _ ->
+                val n = nm.text.toString().trim()
+                if (n.isEmpty()) {
+                    act.toast("装着者名を入力してください")
+                } else {
+                    val d = Wrist.register(store, n, gp.text.toString().trim().ifBlank { "既定" })
+                    store.log("wrist", "端末を登録: ${d.name} (${d.id})")
+                    render()
+                    showWristQr(d)
+                }
+            }.show()
+    }
+
+    private fun showWristQr(d: Wrist.WDev) {
+        val host = Vpn.vpnIp() ?: Net.localIp()
+        val payload = Wrist.qrPayload(d, host)
+        val box = Ui.col(act, 12)
+        val px = Ui.dp(act, 230)
+        val bmp = Qr.encode(payload, px)
+        if (bmp != null) {
+            val iv = android.widget.ImageView(act)
+            iv.setImageBitmap(bmp)
+            iv.setBackgroundColor(0xFFFFFFFF.toInt())
+            iv.setPadding(Ui.dp(act, 8), Ui.dp(act, 8), Ui.dp(act, 8), Ui.dp(act, 8))
+            val lp = LinearLayout.LayoutParams(px, px)
+            lp.gravity = Gravity.CENTER_HORIZONTAL
+            box.addView(iv, lp)
+        }
+        box.addView(
+            Ui.tv(act, "装着者のスマホで読み取ってください。手入力する場合は下記です。", 11f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12))
+        )
+        box.addView(Ui.tv(act, "接続先: $host:${Proto.PORT_WRIST}", 12f, Ui.FG),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        box.addView(Ui.tv(act, "端末ID: ${d.id}", 12f, Ui.FG), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(Ui.tv(act, "トークン: ${d.token}", 12f, Ui.ACC), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        AlertDialog.Builder(act).setTitle("${d.name} の接続情報")
+            .setView(Ui.scroll(act, box))
+            .setPositiveButton("閉じる", null)
+            .setNeutralButton("共有") { _, _ ->
+                shareText(
+                    "放送室 手首端末の接続情報\n接続先: $host:${Proto.PORT_WRIST}\n端末ID: ${d.id}\nトークン: ${d.token}",
+                    "手首端末の接続情報"
+                )
+            }
+            .show()
+    }
+
+    private fun wristDeviceDialog(d: Wrist.WDev) {
+        val box = Ui.col(act, 8)
+        val nm = Ui.edit(act, "装着者名", d.name)
+        val gp = Ui.edit(act, "グループ", d.group)
+        box.addView(Ui.tv(act, "装着者名", 12f, Ui.SUB))
+        box.addView(nm, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(Ui.tv(act, "グループ", 12f, Ui.SUB), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        box.addView(gp, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4)))
+        box.addView(Ui.ghost(act, "🔑 トークンを再発行", Ui.RED) {
+            Wrist.reissue(store, d.id)
+            store.log("security", "手首端末のトークンを再発行: ${d.name}")
+            act.toast("再発行しました。QRを読み直してください")
+            render()
+        }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 14)))
+        box.addView(
+            Ui.tv(act, "再発行すると、いまの設定では接続できなくなります。", 10f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+        )
+        AlertDialog.Builder(act).setTitle("${d.name} の設定")
+            .setView(Ui.scroll(act, box))
+            .setNegativeButton("閉じる", null)
+            .setNeutralButton("削除") { _, _ ->
+                Wrist.remove(store, d.id)
+                store.log("wrist", "端末を削除: ${d.name}")
+                render()
+            }
+            .setPositiveButton("保存") { _, _ ->
+                Wrist.rename(
+                    store, d.id,
+                    nm.text.toString().trim().ifBlank { d.name },
+                    gp.text.toString().trim().ifBlank { d.group }
+                )
+                render()
+            }.show()
+    }
+
+    private fun wristHistory(d: Wrist.WDev) {
+        val box = Ui.col(act, 8)
+        val its = Wrist.items(store, d.id)
+        if (its.isEmpty()) {
+            box.addView(Ui.tv(act, "やりとりはまだありません。", 12f, Ui.SUB))
+        }
+        var i = 0
+        while (i < its.size && i < 40) {
+            val o = its[i]
+            i++
+            val row = Ui.col(act)
+            row.setPadding(0, Ui.dp(act, 6), 0, Ui.dp(act, 6))
+            val kind = if (o.optString("type") == "question") "❓" else "💬"
+            row.addView(Ui.tv(act, "$kind ${o.optString("label_ja")}", 13f, Ui.FG, true))
+            val st = when {
+                o.has("answer") -> "回答: " + Wrist.choiceLabel(o, o.optInt("answer"))
+                o.has("acked_at") -> "既読"
+                else -> "未読"
+            }
+            row.addView(
+                Ui.tv(act, "#${o.optInt("seq")}  $st", 11f,
+                    if (o.has("answer") || o.has("acked_at")) Ui.GREEN else Ui.SUB)
+            )
+            row.addView(Ui.sep(act))
+            box.addView(row)
+        }
+        AlertDialog.Builder(act).setTitle("${d.name} の履歴")
+            .setView(Ui.scroll(act, box))
+            .setPositiveButton("閉じる", null)
+            .show()
+    }
+
+    // ============================================================ 7 ログ
     private fun tabLog(): View {
         val l = Ui.col(act, 14)
         val head = Ui.row(act)
@@ -2425,6 +2893,45 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8))
         )
         l.addView(cr, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
+
+        val cw2 = Ui.card(act)
+        cw2.addView(Ui.tv(act, "⌚ 手首端末連携", 16f, Ui.FG, true))
+        cw2.addView(
+            Ui.tv(act, "Pebbleスマートウォッチへ短文と3択アンケートを送ります。接続先:", 11f, Ui.SUB),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+        )
+        cw2.addView(
+            Ui.tv(act, "${Vpn.vpnIp() ?: Net.localIp()}:${Proto.PORT_WRIST}", 14f, Ui.ACC, true),
+            Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
+        )
+        val pi = Ui.ghost(act, "ポーリング間隔: ${store.wristPollSec}秒", Ui.FG) { }
+        pi.setOnClickListener {
+            val opts = listOf(10, 20, 30, 60)
+            AlertDialog.Builder(act).setTitle("ポーリング間隔")
+                .setItems(opts.map { "${it}秒" }.toTypedArray()) { _, i ->
+                    store.wristPollSec = opts[i]
+                    pi.text = "ポーリング間隔: ${opts[i]}秒"
+                }.show()
+        }
+        cw2.addView(pi, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
+        val tl = Ui.ghost(act, "有効期限: ${store.wristTtlMin}分", Ui.FG) { }
+        tl.setOnClickListener {
+            val opts = listOf(15, 30, 60, 180, 720)
+            AlertDialog.Builder(act).setTitle("送信内容の有効期限")
+                .setItems(opts.map { "${it}分" }.toTypedArray()) { _, i ->
+                    store.wristTtlMin = opts[i]
+                    tl.text = "有効期限: ${opts[i]}分"
+                }.show()
+        }
+        cw2.addView(tl, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        cw2.addView(
+            Ui.tv(
+                act,
+                "期限を過ぎた項目は配信されません。緊急用途には使えません（最大でポーリング間隔ぶん遅延します）。",
+                10f, Ui.SUB
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8))
+        )
+        l.addView(cw2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
 
         l.addView(triggerCard(), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
 
