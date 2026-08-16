@@ -225,25 +225,67 @@ object Wrist {
         return out
     }
 
-    /** ポーリング応答。since より大きく、期限内の項目 */
+    /**
+     * ポーリング応答。since より大きい項目を返す。
+     *
+     * 時間経過による失効は「日付が変わるまで」のみ（Pebble側と基準を揃える）。
+     * 経過時間での自動消滅は行わない。前日以前に投入された未応答の項目は
+     * 配信対象から外し、管理者画面に「失効」として残す。
+     */
     fun poll(store: Store, devId: String, since: Int): JSONArray {
         val a = queue(store).optJSONArray(devId) ?: return JSONArray()
-        val now = System.currentTimeMillis()
+        val today = dayOf(System.currentTimeMillis())
         val out = JSONArray()
         var i = 0
         while (i < a.length()) {
             val o = a.getJSONObject(i)
             i++
             if (o.optInt("seq") <= since) continue
-            val exp = o.optString("expires_at")
-            if (exp.isNotEmpty() && parseIso(exp) in 1 until now) continue
+            if (o.optString("type") != "cancel" && dayOf(o.optLong("at")) != today) continue
             val c = JSONObject(o.toString())
             c.remove("at")
             c.remove("acked_at")
             c.remove("answer")
+            c.remove("answered_at")
+            c.remove("rejected")
+            c.remove("delivered")
             out.put(c)
         }
+        // 配信済みとして印を付ける
+        markDelivered(store, devId, out)
         return out
+    }
+
+    /** ローカル日付（yyyyMMdd） */
+    fun dayOf(t: Long): Int {
+        if (t == 0L) return 0
+        val c = java.util.Calendar.getInstance()
+        c.timeInMillis = t
+        return c.get(java.util.Calendar.YEAR) * 10000 +
+                (c.get(java.util.Calendar.MONTH) + 1) * 100 +
+                c.get(java.util.Calendar.DAY_OF_MONTH)
+    }
+
+    private fun markDelivered(store: Store, devId: String, sent: JSONArray) {
+        if (sent.length() == 0) return
+        val seqs = HashSet<Int>()
+        var i = 0
+        while (i < sent.length()) {
+            seqs.add(sent.getJSONObject(i).optInt("seq")); i++
+        }
+        val q = queue(store)
+        val a = q.optJSONArray(devId) ?: return
+        var changed = false
+        i = 0
+        while (i < a.length()) {
+            val o = a.getJSONObject(i)
+            i++
+            if (seqs.contains(o.optInt("seq")) && !o.has("delivered")) {
+                o.put("delivered", System.currentTimeMillis())
+                changed = true
+            }
+        }
+        if (changed) saveQueue(store, q)
     }
 
     fun items(store: Store, devId: String): List<JSONObject> {
@@ -273,24 +315,120 @@ object Wrist {
         return false
     }
 
-    /** 回答。最後の回答で上書き。期限切れなら false */
+    /**
+     * 回答。最後の回答で上書きする。
+     *
+     * 配信済みの項目は必ず受け取る（親機の期限判定で expired を返さない）。
+     * 取り消したい場合は cancel を明示的に流す。
+     */
     fun answer(store: Store, devId: String, qid: String, cid: Int, at: String): Boolean {
         val q = queue(store)
         val a = q.optJSONArray(devId) ?: return false
-        val now = System.currentTimeMillis()
         var i = 0
         while (i < a.length()) {
             val o = a.getJSONObject(i)
             i++
             if (o.optString("qid") != qid) continue
-            val exp = o.optString("expires_at")
-            if (exp.isNotEmpty() && parseIso(exp) in 1 until now) return false
             o.put("answer", cid)
             o.put("answered_at", if (at.isEmpty()) now() else at)
+            o.remove("rejected")
             saveQueue(store, q)
             return true
         }
         return false
+    }
+
+    /** 未達・未応答の記録（busy / dismissed / day_change） */
+    fun reject(store: Store, devId: String, seq: Int, qid: String, reason: String, at: String): Boolean {
+        val q = queue(store)
+        val a = q.optJSONArray(devId) ?: return false
+        var i = 0
+        while (i < a.length()) {
+            val o = a.getJSONObject(i)
+            i++
+            val hit = if (seq > 0) o.optInt("seq") == seq
+            else qid.isNotEmpty() && o.optString("qid") == qid
+            if (!hit) continue
+            if (o.has("answer") || o.has("acked_at")) return true
+            o.put("rejected", reason)
+            o.put("rejected_at", if (at.isEmpty()) now() else at)
+            saveQueue(store, q)
+            return true
+        }
+        return false
+    }
+
+    /**
+     * 取り消し。cancel 項目をキューに積み、対象を取り消し済みにする。
+     * targetSeq が 0 なら、その端末の応答待ち項目を対象にする。
+     */
+    fun cancel(store: Store, devId: String, targetSeq: Int): Int {
+        val q = queue(store)
+        val a = q.optJSONArray(devId) ?: return 0
+        val target = if (targetSeq > 0) targetSeq else pendingSeq(store, devId)
+        if (target <= 0) return 0
+        var i = 0
+        while (i < a.length()) {
+            val o = a.getJSONObject(i)
+            i++
+            if (o.optInt("seq") != target) continue
+            o.put("rejected", "cancelled")
+            o.put("rejected_at", now())
+            break
+        }
+        val c = JSONObject()
+        c.put("type", "cancel")
+        c.put("target_seq", target)
+        c.put("seq", nextSeq(a))
+        c.put("at", System.currentTimeMillis())
+        // cancel はラベルを持たないため valid() を通さず直接積む
+        a.put(c)
+        q.put(devId, tail(a))
+        saveQueue(store, q)
+        return target
+    }
+
+    /**
+     * 応答待ちの seq。配信済みかつ ack / answer / reject のいずれも
+     * 受けていない項目のうち、最も古いもの。無ければ 0。
+     */
+    fun pendingSeq(store: Store, devId: String): Int {
+        val a = queue(store).optJSONArray(devId) ?: return 0
+        val today = dayOf(System.currentTimeMillis())
+        var i = 0
+        while (i < a.length()) {
+            val o = a.getJSONObject(i)
+            i++
+            if (o.optString("type") == "cancel") continue
+            if (!o.has("delivered")) continue
+            if (o.has("acked_at") || o.has("answer") || o.has("rejected")) continue
+            if (dayOf(o.optLong("at")) != today) continue
+            return o.optInt("seq")
+        }
+        return 0
+    }
+
+    fun pendingItem(store: Store, devId: String): JSONObject? {
+        val seq = pendingSeq(store, devId)
+        if (seq <= 0) return null
+        return items(store, devId).firstOrNull { it.optInt("seq") == seq }
+    }
+
+    /** 最終ポーリングから60秒以内なら接続中とみなす */
+    fun online(d: WDev): Boolean =
+        d.lastSeen > 0 && System.currentTimeMillis() - d.lastSeen < 60000
+
+    /** 項目の状態表示 */
+    fun stateOf(o: JSONObject): String = when {
+        o.optString("type") == "cancel" -> "取り消し"
+        o.has("answer") -> "回答: " + choiceLabel(o, o.optInt("answer"))
+        o.has("acked_at") -> "既読"
+        o.optString("rejected") == "busy" -> "未達（応答待ちのため）"
+        o.optString("rejected") == "dismissed" -> "未応答のまま閉じられた"
+        o.optString("rejected") == "day_change" -> "日をまたいで失効（未応答）"
+        o.optString("rejected") == "cancelled" -> "取り消し済み"
+        o.has("delivered") -> "応答待ち"
+        else -> "未配信"
     }
 
     /** 選択肢の日本語ラベル（履歴表示用） */
@@ -375,21 +513,19 @@ object Wrist {
     )
 
     // ---- 項目の組み立て
-    fun buildMessage(ja: String, ascii: String, urgent: Boolean, ttlMin: Int): JSONObject {
+    fun buildMessage(ja: String, ascii: String, urgent: Boolean): JSONObject {
         val o = JSONObject()
         o.put("type", "message")
         o.put("id", "MSG")
         o.put("label_ja", cut(ja, LIMIT_JA_BODY))
         o.put("label_ascii", cut(ascii, LIMIT_ASCII_BODY))
         o.put("urgency", if (urgent) "high" else "normal")
-        o.put("expires_at", iso(System.currentTimeMillis() + ttlMin * 60000L))
         return o
     }
 
     fun buildQuestion(
         ja: String, ascii: String,
-        choices: List<Pair<String, String>>,
-        ttlMin: Int
+        choices: List<Pair<String, String>>
     ): JSONObject {
         val o = JSONObject()
         o.put("type", "question")
@@ -410,7 +546,6 @@ object Wrist {
             if (i >= 3) break
         }
         o.put("choices", a)
-        o.put("expires_at", iso(System.currentTimeMillis() + ttlMin * 60000L))
         return o
     }
 }

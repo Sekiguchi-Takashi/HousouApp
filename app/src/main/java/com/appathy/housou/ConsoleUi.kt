@@ -2057,38 +2057,98 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                 )
             }
             for (d in ds) {
-                val row = Ui.col(act)
-                row.setPadding(0, Ui.dp(act, 8), 0, Ui.dp(act, 8))
-                val seen = if (d.lastSeen == 0L) "未接続" else "最終通信 " + ago(d.lastSeen)
-                row.addView(Ui.tv(act, d.name, 14f, Ui.FG, true))
-                row.addView(Ui.tv(act, "${d.group} / ${d.id} / $seen", 11f, Ui.SUB))
-
-                // 直近のやりとり
-                val its = Wrist.items(store, d.id)
-                if (its.isNotEmpty()) {
-                    val o = its[0]
-                    val st = when {
-                        o.has("answer") -> "回答: " + Wrist.choiceLabel(o, o.optInt("answer"))
-                        o.has("acked_at") -> "既読"
-                        else -> "未読"
-                    }
-                    row.addView(
-                        Ui.tv(act, "最新「${o.optString("label_ja")}」— $st", 11f,
-                            if (o.has("answer") || o.has("acked_at")) Ui.GREEN else Ui.SUB),
-                        Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 4))
-                    )
-                }
-
-                val ops = Ui.row(act)
-                ops.addView(Ui.ghost(act, "履歴", Ui.FG) { wristHistory(d) }, cw())
-                ops.addView(Ui.ghost(act, "QR", Ui.ACC) { showWristQr(d) }, cw())
-                ops.addView(Ui.ghost(act, "設定", Ui.SUB) { wristDeviceDialog(d) }, cw())
-                row.addView(ops, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
-                row.addView(Ui.sep(act))
-                list.addView(row)
+                list.addView(deviceRow(d))
             }
         }
         return Ui.scroll(act, l)
+    }
+
+    /** 端末1件の行。接続状態と応答待ちを出す */
+    private fun deviceRow(d: Wrist.WDev): LinearLayout {
+        val row = Ui.col(act)
+        row.setPadding(0, Ui.dp(act, 8), 0, Ui.dp(act, 8))
+        val on = Wrist.online(d)
+        val seen = when {
+            d.lastSeen == 0L -> "未接続"
+            on -> "接続中"
+            else -> "最終通信 " + ago(d.lastSeen)
+        }
+        val head = Ui.row(act)
+        head.addView(
+            Ui.tv(act, (if (on) "🟢 " else "⚪ ") + d.name, 14f, Ui.FG, true),
+            LinearLayout.LayoutParams(0, Ui.WC, 1f)
+        )
+        head.addView(Ui.tv(act, seen, 11f, if (on) Ui.GREEN else Ui.SUB))
+        row.addView(head)
+        row.addView(Ui.tv(act, "${d.group} / ${d.id}", 11f, Ui.SUB))
+
+        // 応答待ち
+        val pend = Wrist.pendingItem(store, d.id)
+        if (pend != null) {
+            row.addView(
+                Ui.tv(
+                    act,
+                    "⏳ 応答待ち: 「${pend.optString("label_ja")}」#${pend.optInt("seq")}",
+                    12f, Ui.ACC, true
+                ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+            )
+            row.addView(
+                Ui.tv(act, "この端末へは新しく送れません。取り消すと送れるようになります。", 10f, Ui.SUB),
+                Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 2))
+            )
+            row.addView(Ui.ghost(act, "✖ 取り消して解除", Ui.RED) {
+                cancelPending(d)
+            }, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        } else {
+            val its = Wrist.items(store, d.id).filter { it.optString("type") != "cancel" }
+            if (its.isNotEmpty()) {
+                val o = its[0]
+                val st = Wrist.stateOf(o)
+                val col = when {
+                    o.has("answer") || o.has("acked_at") -> Ui.GREEN
+                    o.has("rejected") -> Ui.RED
+                    else -> Ui.SUB
+                }
+                row.addView(
+                    Ui.tv(act, "最新「${o.optString("label_ja")}」— $st", 11f, col),
+                    Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6))
+                )
+            }
+        }
+
+        val ops = Ui.row(act)
+        ops.addView(Ui.ghost(act, "履歴", Ui.FG) { wristHistory(d) }, cw())
+        if (!d.self) ops.addView(Ui.ghost(act, "QR", Ui.ACC) { showWristQr(d) }, cw())
+        ops.addView(Ui.ghost(act, "設定", Ui.SUB) { wristDeviceDialog(d) }, cw())
+        row.addView(ops, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
+        row.addView(Ui.sep(act))
+        return row
+    }
+
+    private fun cancelPending(d: Wrist.WDev) {
+        val pend = Wrist.pendingItem(store, d.id)
+        if (pend == null) {
+            act.toast("応答待ちの項目はありません")
+            return
+        }
+        AlertDialog.Builder(act)
+            .setTitle("取り消しますか")
+            .setMessage(
+                "「${pend.optString("label_ja")}」を取り消します。\n\n" +
+                        "手首側の表示が閉じられ、この端末へ新しく送れるようになります。" +
+                        "取り消しは次回のポーリング時（最大${store.wristPollSec}秒後）に届きます。"
+            )
+            .setNegativeButton("やめる", null)
+            .setPositiveButton("取り消す") { _, _ ->
+                val seq = Wrist.cancel(store, d.id, 0)
+                if (seq > 0) {
+                    store.log("wrist", "取り消し: ${d.name} #$seq")
+                    act.toast("取り消しました")
+                } else {
+                    act.toast("取り消せませんでした")
+                }
+                render()
+            }.show()
     }
 
     private fun ago(t: Long): String {
@@ -2152,21 +2212,80 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
     }
 
     // ---------------------------------------------------------- 送信
-    private fun sendWristMessage(ja: String, ascii: String, urgent: Boolean) {
+    /**
+     * 送信前の点検。手首は同時に1件しか扱えないため、
+     * 応答待ちの端末とオフラインの端末を洗い出して確認を挟む。
+     * 応答待ちの端末は送信先から外す（送っても busy で弾かれるため）。
+     */
+    private fun checkThenSend(label: String, send: (List<String>) -> Unit) {
         val ids = wristTargets()
         if (ids.isEmpty()) {
             act.toast("送信先の端末がありません")
             return
         }
-        val item = Wrist.buildMessage(ja, ascii, urgent, store.wristTtlMin)
-        val n = Wrist.enqueue(store, ids, item)
-        if (n == 0) {
-            act.toast("ラベルが不足しているため送信できません")
+        val busy = ArrayList<Wrist.WDev>()
+        val offline = ArrayList<Wrist.WDev>()
+        val ok = ArrayList<String>()
+        for (id in ids) {
+            val d = Wrist.find(store, id) ?: continue
+            if (Wrist.pendingSeq(store, id) > 0) {
+                busy.add(d)
+                continue
+            }
+            if (!Wrist.online(d)) offline.add(d)
+            ok.add(id)
+        }
+
+        if (busy.isEmpty() && offline.isEmpty()) {
+            send(ok)
             return
         }
-        act.toast("$n 台へ送信しました")
-        store.log("wrist", "メッセージ送信「$ja」→ ${wristTargetLabel()}")
-        render()
+        if (ok.isEmpty()) {
+            AlertDialog.Builder(act)
+                .setTitle("送信できません")
+                .setMessage(
+                    "送信先がすべて応答待ちです。\n\n" +
+                            busy.joinToString("\n") { "・${it.name}" } +
+                            "\n\n手首は同時に1件しか扱えません。端末の「取り消して解除」を押すか、装着者の応答をお待ちください。"
+                )
+                .setPositiveButton("閉じる", null)
+                .show()
+            return
+        }
+
+        val sb = StringBuilder()
+        if (busy.isNotEmpty()) {
+            sb.append("応答待ちのため送信しない端末:\n")
+            sb.append(busy.joinToString("\n") { "・${it.name}" })
+            sb.append("\n\n")
+        }
+        if (offline.isNotEmpty()) {
+            sb.append("接続中でない端末（届くのは次に時計アプリを開いたとき）:\n")
+            sb.append(offline.joinToString("\n") { "・${it.name}" })
+            sb.append("\n\n")
+        }
+        sb.append("${ok.size}台へ「$label」を送信します。")
+
+        AlertDialog.Builder(act)
+            .setTitle("確認")
+            .setMessage(sb.toString())
+            .setNegativeButton("やめる", null)
+            .setPositiveButton("送信") { _, _ -> send(ok) }
+            .show()
+    }
+
+    private fun sendWristMessage(ja: String, ascii: String, urgent: Boolean) {
+        checkThenSend(ja) { ids ->
+            val item = Wrist.buildMessage(ja, ascii, urgent)
+            val n = Wrist.enqueue(store, ids, item)
+            if (n == 0) {
+                act.toast("ラベルが不足しているため送信できません")
+            } else {
+                act.toast("$n 台へ送信しました")
+                store.log("wrist", "メッセージ送信「$ja」→ ${wristTargetLabel()}")
+                render()
+            }
+        }
     }
 
     private fun freeMessageDialog() {
@@ -2303,20 +2422,17 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
     }
 
     private fun sendWristQuestion(ja: String, ascii: String, choices: List<Pair<String, String>>) {
-        val ids = wristTargets()
-        if (ids.isEmpty()) {
-            act.toast("送信先の端末がありません")
-            return
+        checkThenSend(ja) { ids ->
+            val item = Wrist.buildQuestion(ja, ascii, choices)
+            val n = Wrist.enqueue(store, ids, item)
+            if (n == 0) {
+                act.toast("ラベルが不足しているため送信できません")
+            } else {
+                act.toast("$n 台へ送信しました")
+                store.log("wrist", "アンケート送信「$ja」→ ${wristTargetLabel()}")
+                render()
+            }
         }
-        val item = Wrist.buildQuestion(ja, ascii, choices, store.wristTtlMin)
-        val n = Wrist.enqueue(store, ids, item)
-        if (n == 0) {
-            act.toast("ラベルが不足しているため送信できません")
-            return
-        }
-        act.toast("$n 台へ送信しました")
-        store.log("wrist", "アンケート送信「$ja」→ ${wristTargetLabel()}")
-        render()
     }
 
     // ---------------------------------------------------------- 端末管理
@@ -2519,17 +2635,24 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
             i++
             val row = Ui.col(act)
             row.setPadding(0, Ui.dp(act, 6), 0, Ui.dp(act, 6))
-            val kind = if (o.optString("type") == "question") "❓" else "💬"
-            row.addView(Ui.tv(act, "$kind ${o.optString("label_ja")}", 13f, Ui.FG, true))
-            val st = when {
-                o.has("answer") -> "回答: " + Wrist.choiceLabel(o, o.optInt("answer"))
-                o.has("acked_at") -> "既読"
-                else -> "未読"
+            val kind = when (o.optString("type")) {
+                "question" -> "❓"
+                "cancel" -> "✖"
+                else -> "💬"
             }
-            row.addView(
-                Ui.tv(act, "#${o.optInt("seq")}  $st", 11f,
-                    if (o.has("answer") || o.has("acked_at")) Ui.GREEN else Ui.SUB)
-            )
+            val title = if (o.optString("type") == "cancel") {
+                "取り消し（#${o.optInt("target_seq")}）"
+            } else {
+                o.optString("label_ja")
+            }
+            row.addView(Ui.tv(act, "$kind $title", 13f, Ui.FG, true))
+            val st = Wrist.stateOf(o)
+            val col = when {
+                o.has("answer") || o.has("acked_at") -> Ui.GREEN
+                o.has("rejected") -> Ui.RED
+                else -> Ui.SUB
+            }
+            row.addView(Ui.tv(act, "#${o.optInt("seq")}  $st", 11f, col))
             row.addView(Ui.sep(act))
             box.addView(row)
         }
@@ -3038,22 +3161,15 @@ class ConsoleUi(private val act: MainActivity, private val store: Store) {
                 }.show()
         }
         cw2.addView(pi, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10)))
-        val tl = Ui.ghost(act, "有効期限: ${store.wristTtlMin}分", Ui.FG) { }
-        tl.setOnClickListener {
-            val opts = listOf(15, 30, 60, 180, 720)
-            AlertDialog.Builder(act).setTitle("送信内容の有効期限")
-                .setItems(opts.map { "${it}分" }.toTypedArray()) { _, i ->
-                    store.wristTtlMin = opts[i]
-                    tl.text = "有効期限: ${opts[i]}分"
-                }.show()
-        }
-        cw2.addView(tl, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 6)))
         cw2.addView(
             Ui.tv(
                 act,
-                "期限を過ぎた項目は配信されません。緊急用途には使えません（最大でポーリング間隔ぶん遅延します）。",
+                "手首は同時に1件しか扱えません。応答待ちの端末には新しく送れないため、" +
+                        "端末一覧の「取り消して解除」で差し替えてください。\n" +
+                        "未応答の項目は日付が変わると失効します（時間経過では消えません）。\n" +
+                        "緊急用途には使えません（最大でポーリング間隔ぶん遅延します）。",
                 10f, Ui.SUB
-            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 8))
+            ), Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 10))
         )
         l.addView(cw2, Ui.lp(Ui.MP, Ui.WC, Ui.dp(act, 12)))
 

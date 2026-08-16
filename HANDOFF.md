@@ -1,7 +1,7 @@
 # HANDOFF — HousouApp（放送室）
 
 ## 現況
-v1.8.1 / versionCode 17。Kotlin、UIは全てコード生成（XMLレイアウトなし）。
+v1.9 / versionCode 18。Kotlin、UIは全てコード生成（XMLレイアウトなし）。
 1APK 2ロール（console / terminal）。`Store.mode` で分岐し `MainActivity.route()` が画面を決める。
 
 ## ファイル構成
@@ -110,6 +110,15 @@ v1.8.1 / versionCode 17。Kotlin、UIは全てコード生成（XMLレイアウ�
 - 管理者スマホ自身のPebbleを使う構成を追加。`WDev.self = true` の端末は接続先が `127.0.0.1` になり、サーバと中継が同一端末で完結する。
 - **セルフ端末は1台まで**（`Wrist.selfDevice()`）。一覧とは別枠で描画し、送信先「全員」には含める。
 - プロトコルは無変更。Pebble側の対応は「ホスト欄にループバックを入力できること」のみ。契約書は `docs/HOUSOU_WRIST_API_REPLY.md` の追補v0.3.1に記載。
+
+## v1.9 手首連携の契約更新（v0.6）
+
+- **失効の基準は「日付が変わるまで」だけ**。経過時間による自動消滅は全廃した。`Wrist.dayOf()` で当日判定する。Pebble側も同基準なので、**片方だけ変えると食い違う**。
+- **`expires_at` は送らない**。`/wrist/answer` からも期限判定を撤去。配信済みの項目は必ず受け取る。取り消したいときは `cancel` を明示的に流す。
+- **cancel 項目だけは日付をまたいでも配信する**（取り消しは確実に届ける必要があるため）。ラベルを持たないので `enqueue()` の検証は通さず直接積む。
+- **応答待ちは端末あたり1件**（`pendingSeq()` は最古の1件を返す）。手首側の単一保留と整合させている。
+- **事前抑止と事後NGを併用**。送信時に応答待ちの端末を自動除外しつつ、`/wrist/reject` の busy も受ける（送信直後に応答待ちになる競合は事前チェックでは防げない）。
+- 契約書は `docs/HOUSOU_WRIST_API_REPLY.md` の追補v0.6、依頼元は `docs/HOUSOU_WRIST_CHANGE_REQ.md`。
 
 ## CI / 配布
 

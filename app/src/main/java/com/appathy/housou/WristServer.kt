@@ -100,6 +100,7 @@ class WristServer(private val store: Store, private val onChange: () -> Unit) {
                 method == "GET" && p == "/wrist/poll" -> doPoll(sock, devId, path)
                 method == "POST" && p == "/wrist/ack" -> doAck(sock, devId, body)
                 method == "POST" && p == "/wrist/answer" -> doAnswer(sock, devId, body)
+                method == "POST" && p == "/wrist/reject" -> doReject(sock, devId, body)
                 else -> respond(sock, 404, "{\"ok\":false,\"reason\":\"not_found\"}")
             }
         } catch (e: Exception) {
@@ -158,7 +159,7 @@ class WristServer(private val store: Store, private val onChange: () -> Unit) {
             }
             val ok = Wrist.answer(store, devId, qid, cid, j.optString("answered_at"))
             if (!ok) {
-                respond(sock, 200, "{\"ok\":false,\"reason\":\"expired\"}")
+                respond(sock, 200, "{\"ok\":false,\"reason\":\"not_found\"}")
                 return
             }
             val item = Wrist.items(store, devId).firstOrNull { it.optString("qid") == qid }
@@ -166,6 +167,39 @@ class WristServer(private val store: Store, private val onChange: () -> Unit) {
             val qtext = item?.optString("label_ja") ?: qid
             store.log("wrist", "回答: ${labelOf(devId)}「$qtext」→ $ans")
             onChange()
+            respond(sock, 200, "{\"ok\":true}")
+        } catch (e: Exception) {
+            respond(sock, 400, "{\"ok\":false,\"reason\":\"bad_request\"}")
+        }
+    }
+
+    /**
+     * 未達・未応答の通知。
+     *  busy       … 先行1件が未応答のため受け取らなかった
+     *  dismissed  … 表示されたが応答されずに閉じられた
+     *  day_change … 日付が変わって失効した
+     * 親機は記録するだけで、時計側の制御には介入しない。
+     */
+    private fun doReject(sock: Socket, devId: String, body: String) {
+        try {
+            val j = JSONObject(body)
+            val seq = j.optInt("seq", 0)
+            val qid = j.optString("qid")
+            val reason = j.optString("reason", "dismissed")
+            if (seq <= 0 && qid.isEmpty()) {
+                respond(sock, 400, "{\"ok\":false,\"reason\":\"bad_request\"}")
+                return
+            }
+            val ok = Wrist.reject(store, devId, seq, qid, reason, j.optString("rejected_at"))
+            if (ok) {
+                val text = when (reason) {
+                    "busy" -> "未達（応答待ちのため）"
+                    "day_change" -> "日をまたいで失効"
+                    else -> "未応答のまま閉じられた"
+                }
+                store.log("wrist", "$text: ${labelOf(devId)} #$seq")
+                onChange()
+            }
             respond(sock, 200, "{\"ok\":true}")
         } catch (e: Exception) {
             respond(sock, 400, "{\"ok\":false,\"reason\":\"bad_request\"}")
