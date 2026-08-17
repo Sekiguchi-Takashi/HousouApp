@@ -341,14 +341,23 @@ UDPブロードキャストはルータを越えないため、別サブネッ�
 ## ビルド・配布
 
 `deploy.sh` を実行すると、push → タグ発行までが1コマンドで完結する。
-タグ発行により release ワークフローがビルドして Release を作り、自作アプリストアに更新として現れる。
+タグ発行により `release.yml` がビルドして Release を作り、自作アプリストアに更新として現れる。
 
 ```
 bash deploy.sh "変更内容"
+bash deploy.sh "変更内容" notag
 ```
 
-`build.yml` はコンパイルが通るかの検証のみで、APKの成果物保存は行わない
-（Artifacts の無料枠を消費しないため）。APKは Release から取得する。
+第2引数に `notag` を渡すと push のみでタグを発行しない。
+
+次のタグは `git tag --list 'v*' | sort -V` の最大値から算出してローカルで発行する
+（GitHub API の heads/releases 参照は反映遅延で一つ前のタグに付くため使わない）。
+
+CI は `release.yml`（タグ起動）のみ。`build.yml` は置かない。
+`actions/upload-artifact` は使わない（Artifacts の無料枠 0.5GB が枯渇すると全ビルドが落ちるため）。
+APK は Release から取得する。
+
+`ci/` ディレクトリと `.github/workflows/release.yml` は配布ビルドに必要なので削除しないこと。
 
 ### 署名について
 

@@ -120,11 +120,13 @@ v1.9 / versionCode 18。Kotlin、UIは全てコード生成（XMLレイアウト
 - **事前抑止と事後NGを併用**。送信時に応答待ちの端末を自動除外しつつ、`/wrist/reject` の busy も受ける（送信直後に応答待ちになる競合は事前チェックでは防げない）。
 - 契約書は `docs/HOUSOU_WRIST_API_REPLY.md` の追補v0.6、依頼元は `docs/HOUSOU_WRIST_CHANGE_REQ.md`。
 
-## CI / 配布
+## CI / 配布（恒久規約）
 
-- `deploy.sh` は恒久ルール準拠（pull --rebase → push → 直近リリースから次パッチ版を算出してタグ発行）。
-- `.github/workflows/release.yml` と `ci/appathy.keystore` はカタログ管理システムが API 経由で直接コミットする。**削除しないこと**。pull --rebase が無いと push が rejected になる。
-- `build.yml` は検証専用。**upload-artifact は入れない**（Artifacts 無料枠 0.5GB が枯渇して "Artifact storage quota has been hit" でビルドが落ちるため）。APK は Release 経由で配布する。
+- `deploy.sh` は push → pull --rebase → タグ発行まで。第2引数 `notag` で push のみ。
+- **次タグは `git tag --list 'v*' | sort -V` の最大値から算出してローカル発行する**。GitHub API の heads/releases 参照は反映遅延で一つ前のタグに付くため**禁止**。
+- **`build.yml` は作らない**。CI は `release.yml`（タグ起動）のみ。`actions/upload-artifact` は使わない（Artifacts 枠 0.5GB が枯渇すると全ビルドが落ちる）。
+- `.github/workflows/release.yml` と `ci/` はカタログ管理システムが API 経由で直接コミットする。**削除・追跡解除しない**。pull --rebase が無いと push が rejected になる。
+- **ファイルを削除する納品では `deploy.sh` に `rm -f <対象パス>` を足す**（`unzip -o` は端末の旧ファイルを消さないため）。
 
 ## 署名（v1.6.1〜）
 
